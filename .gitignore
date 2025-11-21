@@ -1,0 +1,139 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# PyTorch
+*.pth
+*.pt
+!models/.gitkeep
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Data - Images are too large for Git
+data/raw/**/*
+!data/raw/.gitkeep
+data/accident_images/**/*
+!data/accident_images/.gitkeep
+!data/accident_images/train/.gitkeep
+!data/accident_images/val/.gitkeep
+!data/accident_images/test/.gitkeep
+
+# But keep these data files (small text/config files)
+!data/*.txt
+!data/*.html
+!data/*.osm
+!data/*.json
+
+# Kaggle credentials (NEVER commit this!)
+.kaggle/
+kaggle.json
+
+# Model outputs - Too large for Git
+models/*.pth
+models/*.pt
+models/*.h5
+models/*.onnx
+!models/.gitkeep
+
+# Training outputs
+models/training_*.png
+models/confusion_*.png
+models/*.json
+!models/README.md
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Generated visualizations
+visualizations/*.png
+visualizations/*.jpg
+visualizations/*.html
+!visualizations/.gitkeep
+
+# Cache
+.cache/
+*.cache
+.kagglehub/
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+
+# pytype
+.pytype/
+
+# Environment variables
+.env
+.env.local
+
+# Large datasets (skip versioning)
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# OS-specific
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+
+# Keep directory structure with .gitkeep files
+!**/.gitkeep
