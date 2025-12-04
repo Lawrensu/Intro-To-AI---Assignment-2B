@@ -287,8 +287,7 @@ class RNNTrainer:
             self.optimizer,
             mode='min',
             factor=0.5,
-            patience=5,
-            verbose=True
+            patience=5
         )
         
         # Loss function (will be set during training based on task)
