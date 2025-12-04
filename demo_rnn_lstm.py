@@ -15,7 +15,7 @@ from pathlib import Path
 import sys
 
 # Add src directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 from models.rnn_model import (
     TrafficPatternRNN,
