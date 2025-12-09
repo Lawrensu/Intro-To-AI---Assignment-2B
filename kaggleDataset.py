@@ -247,15 +247,15 @@ def print_final_summary(organized_dir, stats):
     # Quality assessment
     print("\n[QUALITY ASSESSMENT]")
     if total_images >= 8000:
-        grade = "A+ [EXCELLENT - Top-tier dataset]"
+        grade = "A+ [Great]"
     elif total_images >= 6000:
-        grade = "A [EXCELLENT]"
+        grade = "A [Cool]"
     elif total_images >= 4000:
-        grade = "B+ [VERY GOOD]"
+        grade = "B+ [Nice]"
     elif total_images >= 2500:
-        grade = "B [GOOD]"
+        grade = "B [Good]"
     else:
-        grade = "C [ACCEPTABLE but could use more data]"
+        grade = "C [Maybe]"
     
     print(f"  Dataset Size: {grade}")
     
