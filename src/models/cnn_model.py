@@ -23,8 +23,8 @@ import copy
 from pathlib import Path
 
 # Number of classes for incident severity
-NUM_CLASSES = 3
-CLASS_NAMES = ['minor', 'moderate', 'severe']
+NUM_CLASSES = 4  
+CLASS_NAMES = ['none', 'minor', 'moderate', 'severe'] 
 
 
 class IncidentCNN(nn.Module):

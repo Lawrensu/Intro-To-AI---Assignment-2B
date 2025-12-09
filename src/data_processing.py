@@ -1,106 +1,83 @@
 """
-Data processing utilities for the Traffic Incident Classification System
-
-Handles dataset preparation, augmentation, and loading for 3-class classification:
-- Class 0: Minor
-- Class 1: Moderate  
-- Class 2: Severe
-
-Note: No "none" class - we only classify existing traffic incidents
+Data processing for 4-class Traffic Incident Classification
+Classes: None, Minor, Moderate, Severe
 """
 
-import os
-import shutil
-import random
+import torch
 from pathlib import Path
 from typing import Tuple, Dict
-
-import torch
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms, datasets
+from torch.utils.data import DataLoader
 from PIL import Image
+import numpy as np
 
+# Import transforms separately to avoid circular import
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
 
-# Class mapping for 3-class incident severity classification
-CLASS_NAMES = ['minor', 'moderate', 'severe']
-NUM_CLASSES = 3
-
-# Image preprocessing constants
+CLASS_NAMES = ['none', 'minor', 'moderate', 'severe']
+NUM_CLASSES = 4
 IMAGE_SIZE = 224
 MEAN = [0.485, 0.456, 0.406]
 STD = [0.229, 0.224, 0.225]
 
 
 def get_data_transforms(augment=True):
-    """
-    Get data transformation pipelines for training and validation
-    
-    Args:
-        augment (bool): Whether to apply data augmentation for training
-    
-    Returns:
-        dict: Dictionary containing 'train' and 'val' transforms
-    """
+    """Get transforms for train/val/test"""
     if augment:
-        train_transform = transforms.Compose([
-            transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomRotation(degrees=15),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-            transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=MEAN, std=STD)
-        ])
+        return {
+            'train': transforms.Compose([
+                transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomRotation(15),
+                transforms.ColorJitter(0.2, 0.2, 0.2),
+                transforms.ToTensor(),
+                transforms.Normalize(MEAN, STD)
+            ]),
+            'val': transforms.Compose([
+                transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+                transforms.ToTensor(),
+                transforms.Normalize(MEAN, STD)
+            ]),
+            'test': transforms.Compose([
+                transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+                transforms.ToTensor(),
+                transforms.Normalize(MEAN, STD)
+            ])
+        }
     else:
-        train_transform = transforms.Compose([
+        transform = transforms.Compose([
             transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
             transforms.ToTensor(),
-            transforms.Normalize(mean=MEAN, std=STD)
+            transforms.Normalize(MEAN, STD)
         ])
-    
-    val_transform = transforms.Compose([
-        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=MEAN, std=STD)
-    ])
-    
-    return {
-        'train': train_transform,
-        'val': val_transform,
-        'test': val_transform
-    }
+        return {'train': transform, 'val': transform, 'test': transform}
 
 
-def create_dataloaders(data_dir: str, batch_size: int = 32, num_workers: int = 4, 
+def create_dataloaders(data_dir: str, batch_size: int = 32, num_workers: int = 4,
                        augment: bool = True) -> Tuple[Dict[str, DataLoader], Dict[str, datasets.ImageFolder]]:
-    """
-    Create PyTorch dataloaders for train, validation, and test sets
+    """Create dataloaders for train/val/test"""
+    data_dir = Path(data_dir)
+    data_transforms = get_data_transforms(augment)
     
-    Args:
-        data_dir (str): Path to the organized dataset directory
-        batch_size (int): Batch size for dataloaders
-        num_workers (int): Number of worker processes for data loading
-        augment (bool): Whether to apply data augmentation
-    
-    Returns:
-        tuple: (dataloaders_dict, datasets_dict)
-    """
-    data_transforms = get_data_transforms(augment=augment)
-    
-    # Create datasets for each split
+    # Create datasets using ImageFolder
     image_datasets = {
         split: datasets.ImageFolder(
-            root=os.path.join(data_dir, split),
+            root=str(data_dir / split),
             transform=data_transforms[split]
         )
         for split in ['train', 'val', 'test']
     }
     
-    # Verify we have exactly 3 classes
-    for split, dataset in image_datasets.items():
-        if len(dataset.classes) != NUM_CLASSES:
-            print(f"WARNING: {split} set has {len(dataset.classes)} classes, expected {NUM_CLASSES}")
-            print(f"Classes found: {dataset.classes}")
+    # Verify classes
+    actual_classes = sorted(image_datasets['train'].classes)
+    expected_classes = sorted(CLASS_NAMES)
+    
+    print(f"\n[OK] Found classes: {actual_classes}")
+    print(f"     Expected: {expected_classes}")
+    
+    if actual_classes != expected_classes:
+        print(f"[WARNING] Class mismatch!")
+        print(f"          This may cause issues during training")
     
     # Create dataloaders
     dataloaders = {
@@ -127,253 +104,167 @@ def create_dataloaders(data_dir: str, batch_size: int = 32, num_workers: int = 4
         )
     }
     
-    # Print dataset statistics
-    print("\nDataset Statistics:")
-    print("=" * 70)
-    for split in ['train', 'val', 'test']:
-        dataset = image_datasets[split]
-        print(f"{split.capitalize()} set: {len(dataset)} images")
-        
-        # Count images per class
-        class_counts = {}
-        for idx in range(len(dataset)):
-            _, label = dataset[idx]
-            class_name = dataset.classes[label]
-            class_counts[class_name] = class_counts.get(class_name, 0) + 1
-        
-        for class_name, count in sorted(class_counts.items()):
-            print(f"  {class_name}: {count} images")
-    print("=" * 70)
-    
     return dataloaders, image_datasets
 
 
-def prepare_kaggle_dataset(kaggle_dir: str, target_dir: str, 
-                           train_split: float = 0.7, val_split: float = 0.15,
-                           random_seed: int = 42):
-    """
-    Organize Kaggle dataset into train/val/test splits
+def calculate_class_weights(data_dir: str, split: str = 'train') -> torch.Tensor:
+    """Calculate class weights for handling class imbalance"""
+    data_dir = Path(data_dir) / split
     
-    Maps from raw folder names to training folder names:
-    - minor_damage -> minor (Class 0)
-    - moderate_damage -> moderate (Class 1)
-    - severe_damage -> severe (Class 2)
+    class_counts = []
+    for class_name in CLASS_NAMES:
+        class_path = data_dir / class_name
+        if class_path.exists():
+            count = len(list(class_path.glob('*.jpg'))) + len(list(class_path.glob('*.png')))
+            class_counts.append(count)
+        else:
+            class_counts.append(0)
     
-    Args:
-        kaggle_dir (str): Path to raw Kaggle dataset (data/raw/)
-        target_dir (str): Path to organized dataset (data/accident_images/)
-        train_split (float): Proportion of data for training (default: 0.7)
-        val_split (float): Proportion of data for validation (default: 0.15)
-        random_seed (int): Random seed for reproducibility
-    """
-    random.seed(random_seed)
+    total_samples = sum(class_counts)
+    if total_samples == 0:
+        return torch.ones(NUM_CLASSES)
     
-    # Folder name mapping (raw -> organized)
-    folder_mapping = {
-        'minor_damage': 'minor',
-        'moderate_damage': 'moderate',
-        'severe_damage': 'severe'
+    class_weights = [
+        total_samples / (NUM_CLASSES * count) if count > 0 else 0
+        for count in class_counts
+    ]
+    
+    return torch.FloatTensor(class_weights)
+
+
+def evaluate_dataset_sufficiency(data_dir: str) -> Dict:
+    """Check if dataset is sufficient"""
+    data_dir = Path(data_dir)
+    stats = {
+        'sufficient': True,
+        'warnings': [],
+        'recommendations': [],
+        'total_images': 0
     }
     
-    print(f"\nPreparing dataset from {kaggle_dir} to {target_dir}...")
-    print(f"Split: Train={train_split:.0%}, Val={val_split:.0%}, Test={1-train_split-val_split:.0%}")
-    
-    # Create target directory structure
     for split in ['train', 'val', 'test']:
+        split_path = data_dir / split
+        if not split_path.exists():
+            stats['sufficient'] = False
+            stats['warnings'].append(f"Missing {split} directory")
+            continue
+        
+        split_counts = {}
         for class_name in CLASS_NAMES:
-            os.makedirs(os.path.join(target_dir, split, class_name), exist_ok=True)
+            class_path = split_path / class_name
+            if class_path.exists():
+                count = len(list(class_path.glob('*.jpg'))) + len(list(class_path.glob('*.png')))
+                split_counts[class_name] = count
+            else:
+                split_counts[class_name] = 0
+                stats['warnings'].append(f"Missing {class_name} in {split}")
+        
+        stats[split] = split_counts
+        stats['total_images'] += sum(split_counts.values())
+        
+        # Check minimum samples
+        min_samples = {'train': 100, 'val': 20, 'test': 20}
+        for class_name, count in split_counts.items():
+            if count < min_samples[split]:
+                stats['sufficient'] = False
+                stats['warnings'].append(
+                    f"{class_name} in {split} has only {count} samples (need >= {min_samples[split]})"
+                )
     
-    # Process each raw class folder
-    total_images = 0
-    class_stats = {class_name: {'train': 0, 'val': 0, 'test': 0} for class_name in CLASS_NAMES}
+    # Add recommendations
+    total = stats['total_images']
+    if total < 500:
+        stats['recommendations'].append("[WARNING] Dataset is VERY small - use heavy data augmentation")
+    elif total < 1000:
+        stats['recommendations'].append("[WARNING] Dataset is small - use data augmentation")
+    elif total < 2000:
+        stats['recommendations'].append("[OK] Dataset size is acceptable")
+    else:
+        stats['recommendations'].append("[OK] Dataset size is GOOD")
     
-    for raw_folder, target_folder in folder_mapping.items():
-        source_dir = os.path.join(kaggle_dir, raw_folder)
-        
-        if not os.path.exists(source_dir):
-            print(f"WARNING: {source_dir} not found, skipping...")
-            continue
-        
-        # Get all image files
-        image_files = []
-        for ext in ['*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG']:
-            image_files.extend(Path(source_dir).glob(ext))
-        
-        if len(image_files) == 0:
-            print(f"WARNING: No images found in {source_dir}")
-            continue
-        
-        # Shuffle and split
-        random.shuffle(image_files)
-        n_train = int(len(image_files) * train_split)
-        n_val = int(len(image_files) * val_split)
-        
-        train_files = image_files[:n_train]
-        val_files = image_files[n_train:n_train + n_val]
-        test_files = image_files[n_train + n_val:]
-        
-        # Copy files to respective splits
-        splits = {
-            'train': train_files,
-            'val': val_files,
-            'test': test_files
-        }
-        
-        for split, files in splits.items():
-            dest_dir = os.path.join(target_dir, split, target_folder)
-            for img_file in files:
-                dest_path = os.path.join(dest_dir, img_file.name)
-                shutil.copy2(img_file, dest_path)
-                class_stats[target_folder][split] += 1
-                total_images += 1
-        
-        print(f"  {raw_folder} -> {target_folder}: "
-              f"{len(train_files)} train, {len(val_files)} val, {len(test_files)} test")
-    
-    # Print final statistics
-    print("\nDataset Organization Complete!")
-    print("=" * 70)
-    print(f"Total images processed: {total_images}")
-    print("\nClass distribution:")
-    for class_name in CLASS_NAMES:
-        stats = class_stats[class_name]
-        total = sum(stats.values())
-        print(f"  {class_name.capitalize()}: {total} total "
-              f"(train: {stats['train']}, val: {stats['val']}, test: {stats['test']})")
-    print("=" * 70)
+    return stats
 
 
-def calculate_class_weights(data_dir: str, split: str = 'train') -> torch.Tensor:
-    """
-    Calculate class weights for handling class imbalance
-    
-    Args:
-        data_dir (str): Path to organized dataset
-        split (str): Which split to calculate weights from (default: 'train')
-    
-    Returns:
-        torch.Tensor: Class weights for loss function
-    """
-    dataset = datasets.ImageFolder(root=os.path.join(data_dir, split))
-    
-    # Count samples per class
-    class_counts = [0] * NUM_CLASSES
-    for _, label in dataset.samples:
-        class_counts[label] += 1
-    
-    # Calculate inverse frequency weights
-    total = sum(class_counts)
-    weights = [total / (NUM_CLASSES * count) if count > 0 else 0 for count in class_counts]
-    
-    print("\nClass Weights (for handling imbalance):")
-    for i, (class_name, weight, count) in enumerate(zip(CLASS_NAMES, weights, class_counts)):
-        print(f"  Class {i} ({class_name}): {count} samples, weight: {weight:.4f}")
-    
-    return torch.FloatTensor(weights)
-
-
-def get_sample_images(data_dir: str, split: str = 'train', num_samples: int = 5):
-    """
-    Get sample images from each class for visualization
-    
-    Args:
-        data_dir (str): Path to organized dataset
-        split (str): Which split to sample from
-        num_samples (int): Number of samples per class
-    
-    Returns:
-        dict: Dictionary mapping class names to lists of image paths
-    """
-    samples = {class_name: [] for class_name in CLASS_NAMES}
-    
-    for class_name in CLASS_NAMES:
-        class_dir = os.path.join(data_dir, split, class_name)
-        if os.path.exists(class_dir):
-            image_files = list(Path(class_dir).glob('*.jpg')) + list(Path(class_dir).glob('*.png'))
-            samples[class_name] = random.sample(image_files, min(num_samples, len(image_files)))
-    
-    return samples
-
-
-class IncidentDataset(Dataset):
-    """
-    Custom Dataset for Traffic Incident Classification
-    """
-    
-    def __init__(self, data_dir: str, split: str = 'train', transform=None):
-        """
-        Args:
-            data_dir (str): Path to organized dataset
-            split (str): 'train', 'val', or 'test'
-            transform: Torchvision transforms to apply
-        """
-        self.data_dir = os.path.join(data_dir, split)
-        self.transform = transform
-        self.classes = CLASS_NAMES
-        self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
-        
-        # Load all image paths and labels
-        self.samples = []
-        for class_name in self.classes:
-            class_dir = os.path.join(self.data_dir, class_name)
-            if os.path.exists(class_dir):
-                for img_name in os.listdir(class_dir):
-                    if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
-                        img_path = os.path.join(class_dir, img_name)
-                        self.samples.append((img_path, self.class_to_idx[class_name]))
-    
-    def __len__(self):
-        return len(self.samples)
-    
-    def __getitem__(self, idx):
-        img_path, label = self.samples[idx]
-        image = Image.open(img_path).convert('RGB')
-        
-        if self.transform:
-            image = self.transform(image)
-        
-        return image, label
-
-
-# Utility function to denormalize images for visualization
-def denormalize(tensor, mean=MEAN, std=STD):
-    """
-    Denormalize tensor for visualization
-    
-    Args:
-        tensor: Normalized image tensor
-        mean: Mean used for normalization
-        std: Std used for normalization
-    
-    Returns:
-        Denormalized tensor
-    """
-    for t, m, s in zip(tensor, mean, std):
-        t.mul_(s).add_(m)
-    return tensor
-
-
+# Test module
 if __name__ == "__main__":
-    # Test data processing
-    print("Testing data processing module...")
-    print(f"Number of classes: {NUM_CLASSES}")
-    print(f"Class names: {CLASS_NAMES}")
+    print("=" * 70)
+    print("TESTING DATA PROCESSING MODULE")
+    print("=" * 70)
+    print(f"\nConfiguration:")
+    print(f"  Classes: {CLASS_NAMES}")
+    print(f"  Number of classes: {NUM_CLASSES}")
+    print(f"  Image size: {IMAGE_SIZE}x{IMAGE_SIZE}")
     
-    # Test if dataset exists
     data_dir = "data/accident_images"
-    if os.path.exists(data_dir):
+    
+    if not Path(data_dir).exists():
+        print(f"\n[ERROR] Dataset not found at: {data_dir}")
+        print("\n[INFO] Run first: python kaggleDataset.py")
+        exit(1)
+    
+    # Evaluate dataset
+    print("\n" + "=" * 70)
+    print("EVALUATING DATASET")
+    print("=" * 70)
+    
+    stats = evaluate_dataset_sufficiency(data_dir)
+    
+    print(f"\n[SUMMARY] Dataset Statistics:")
+    for split in ['train', 'val', 'test']:
+        if split in stats:
+            total = sum(stats[split].values())
+            print(f"\n{split.capitalize()} set: {total} images")
+            for class_name, count in stats[split].items():
+                pct = (count / total * 100) if total > 0 else 0
+                print(f"  {class_name:>10s}: {count:4d} images ({pct:5.1f}%)")
+    
+    print(f"\nTotal images: {stats['total_images']}")
+    
+    if stats['warnings']:
+        print("\n[WARNINGS]")
+        for w in stats['warnings']:
+            print(f"  - {w}")
+    
+    if stats['recommendations']:
+        print("\n[RECOMMENDATIONS]")
+        for r in stats['recommendations']:
+            print(f"  - {r}")
+    
+    if stats['sufficient']:
+        print("\n[OK] Dataset is sufficient!")
+        
+        # Test dataloader
+        print("\n" + "=" * 70)
+        print("TESTING DATALOADER")
+        print("=" * 70)
+        
         try:
-            dataloaders, datasets_dict = create_dataloaders(data_dir, batch_size=16)
-            print("\n✓ Data loading successful!")
+            dataloaders, datasets_dict = create_dataloaders(
+                data_dir,
+                batch_size=16,
+                num_workers=0,  # Use 0 for testing
+                augment=True
+            )
             
-            # Test batch loading
+            print("[OK] Dataloader created successfully!")
+            
+            # Get a batch
             images, labels = next(iter(dataloaders['train']))
-            print(f"\nBatch shape: {images.shape}")
-            print(f"Labels shape: {labels.shape}")
-            print(f"Unique labels in batch: {labels.unique().tolist()}")
+            print(f"\n[SAMPLE] Batch:")
+            print(f"  Images shape: {images.shape}")
+            print(f"  Labels shape: {labels.shape}")
+            print(f"  Unique labels: {torch.unique(labels).tolist()}")
+            print(f"  Label distribution: {torch.bincount(labels).tolist()}")
+            
+            print("\n[OK] Data processing test PASSED!")
+            print("=" * 70)
             
         except Exception as e:
-            print(f"\n✗ Error loading data: {e}")
+            print(f"\n[ERROR] Dataloader test FAILED: {e}")
+            import traceback
+            traceback.print_exc()
     else:
-        print(f"\n⚠ Dataset not found at {data_dir}")
-        print("Run 'python kaggleDataset.py' to prepare the dataset first")
+        print("\n[ERROR] Dataset is NOT sufficient!")
+        print("        Fix the warnings above before training")
+    
+    print("=" * 70)

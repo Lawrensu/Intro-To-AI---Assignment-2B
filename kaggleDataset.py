@@ -1,538 +1,488 @@
 """
-Script to download and prepare the Kaggle Car Damage Severity Dataset
-Dataset: https://www.kaggle.com/datasets/prajwalbhamere/car-damage-severity-dataset
+Enhanced Dataset Preparation Script - Multi-Dataset Support
+Downloads and organizes multiple Kaggle datasets for 4-class traffic incident classification
 
-This dataset is used as a proxy for traffic incident severity classification.
-The car damage levels map to traffic incident severity levels.
+DATASETS:
+1. Clean cars (none class) - kshitij192/cars-image-dataset
+2. Minor damage - abdulrahmankerim/crash-car-image-hybrid-dataset-ccih
+3. Moderate damage - marslanarshad/car-accidents-and-deformation-datasetannotated
+4. Severe damage - exameese/accident-severity-image-dataset-v4
+5. Additional mixed - prajwalbhamere/car-damage-severity-dataset
 
-This script:
-1. Downloads dataset from Kaggle (to kagglehub cache)
-2. Copies to data/raw/ (backup, all images in class folders)
-3. Organizes into data/accident_images/ (train/val/test splits for training)
-
-CLASS STRUCTURE (3 classes):
-- data/raw/: minor_damage, moderate_damage, severe_damage
-- data/accident_images/: minor, moderate, severe
-
-Note: There is NO "none" class - we only classify existing incidents.
+CLASSES: None, Minor, Moderate, Severe (4 classes)
 """
 
 import os
 import sys
 import shutil
 from pathlib import Path
+from sklearn.model_selection import train_test_split
+import time
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent))
 
-from src.data_processing import prepare_kaggle_dataset
 
-
-def explore_downloaded_structure(download_path, depth=0, max_depth=3):
+def download_dataset(dataset_id, description=""):
     """
-    Explore the structure of the downloaded dataset recursively
+    Download a dataset using kagglehub
     
     Args:
-        download_path (str): Path where dataset was downloaded
-        depth (int): Current depth level
-        max_depth (int): Maximum depth to explore
+        dataset_id: Kaggle dataset identifier
+        description: Human-readable description
     
     Returns:
-        dict: Structure information
-    """
-    path = Path(download_path)
-    structure = {
-        'folders': [],
-        'files': [],
-        'total_images': 0,
-        'nested_structure': {}
-    }
-    
-    if not path.exists() or depth >= max_depth:
-        return structure
-    
-    indent = "  " * depth
-    
-    if depth == 0:
-        print(f"\nExploring downloaded dataset structure at: {path}")
-        print("-" * 70)
-    
-    # List all items in the download path
-    for item in path.iterdir():
-        if item.is_dir():
-            structure['folders'].append(item.name)
-            img_count = len(list(item.glob('*.[jJ][pP][gG]'))) + \
-                       len(list(item.glob('*.[jJ][pP][eE][gG]'))) + \
-                       len(list(item.glob('*.[pP][nN][gG]')))
-            
-            # Check if folder has subfolders
-            subfolders = [x for x in item.iterdir() if x.is_dir()]
-            
-            if len(subfolders) > 0:
-                print(f"{indent}Folder: {item.name}/ ({len(subfolders)} subfolders)")
-                # Recursively explore
-                nested = explore_downloaded_structure(item, depth + 1, max_depth)
-                structure['nested_structure'][item.name] = nested
-                structure['total_images'] += nested['total_images']
-            else:
-                print(f"{indent}Folder: {item.name}/ ({img_count} images)")
-                structure['total_images'] += img_count
-        else:
-            structure['files'].append(item.name)
-            if depth == 0:
-                print(f"{indent}File: {item.name}")
-    
-    if depth == 0:
-        print("-" * 70)
-        print(f"Total folders: {len(structure['folders'])}")
-        print(f"Total files: {len(structure['files'])}")
-        print(f"Total images: {structure['total_images']}")
-    
-    return structure
-
-
-def find_image_folders(root_path, min_images=10):
-    """
-    Recursively find folders containing images
-    
-    Args:
-        root_path (Path): Root path to search
-        min_images (int): Minimum number of images to consider a valid folder
-    
-    Returns:
-        list: List of tuples (folder_path, image_count, folder_name)
-    """
-    image_folders = []
-    
-    def search_recursive(current_path):
-        for item in current_path.iterdir():
-            if item.is_dir():
-                # Count images in this folder
-                img_count = len(list(item.glob('*.[jJ][pP][gG]'))) + \
-                           len(list(item.glob('*.[jJ][pP][eE][gG]'))) + \
-                           len(list(item.glob('*.[pP][nN][gG]')))
-                
-                if img_count >= min_images:
-                    image_folders.append((item, img_count, item.name))
-                
-                # Continue searching in subfolders
-                search_recursive(item)
-    
-    search_recursive(root_path)
-    return image_folders
-
-
-def copy_kagglehub_dataset_to_raw(kagglehub_path, raw_path="data/raw"):
-    """
-    Copy dataset from kagglehub cache to our data/raw directory
-    Only copies the 3 incident severity classes (no "none" class)
-    
-    Args:
-        kagglehub_path (str): Path where kagglehub downloaded the dataset
-        raw_path (str): Our target raw data directory
-    
-    Returns:
-        bool: True if successful
-    """
-    print(f"\nCopying dataset from kagglehub cache to {raw_path}...")
-    print("(Only incident severity classes: minor, moderate, severe)")
-    
-    kagglehub_dir = Path(kagglehub_path)
-    raw_dir = Path(raw_path)
-    
-    # Create raw directory
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    
-    # First, explore what we actually have
-    structure = explore_downloaded_structure(kagglehub_path)
-    
-    # Find all folders with images
-    image_folders = find_image_folders(kagglehub_dir)
-    
-    if len(image_folders) == 0:
-        print("No folders with images found in downloaded dataset!")
-        return False
-    
-    print(f"\nFound {len(image_folders)} folders with images:")
-    for folder_path, img_count, folder_name in image_folders:
-        print(f"  {folder_name}: {img_count} images")
-    
-    # Map Kaggle folder names to standard raw folder names
-    # ONLY map the 3 severity classes (skip no_damage/00-damage)
-    folder_mapping = {
-        '01-minor': 'minor_damage',
-        'minor_damage': 'minor_damage',
-        'minor damage': 'minor_damage',
-        'minor': 'minor_damage',
-        '1': 'minor_damage',
-        '02-moderate': 'moderate_damage',
-        'moderate_damage': 'moderate_damage',
-        'moderate damage': 'moderate_damage',
-        'moderate': 'moderate_damage',
-        '2': 'moderate_damage',
-        '03-severe': 'severe_damage',
-        'severe_damage': 'severe_damage',
-        'severe damage': 'severe_damage',
-        'severe': 'severe_damage',
-        '3': 'severe_damage'
-    }
-    
-    copied_folders = []
-    skipped_folders = []
-    
-    print(f"\nCopying folders to {raw_path}:")
-    
-    # Copy all image folders, mapping to our standard names
-    for folder_path, img_count, folder_name in image_folders:
-        folder_lower = folder_name.lower()
-        
-        # Skip "no damage" folders
-        if any(skip in folder_lower for skip in ['00-damage', 'no_damage', 'no damage', 'none']):
-            print(f"  Skipping '{folder_name}' (not used in incident classification)")
-            skipped_folders.append(folder_name)
-            continue
-        
-        # Determine destination name
-        dest_name = folder_mapping.get(folder_lower, None)
-        
-        if dest_name is None:
-            print(f"  Skipping '{folder_name}' (unknown class)")
-            skipped_folders.append(folder_name)
-            continue
-        
-        dest = raw_dir / dest_name
-        
-        # Remove destination if it exists
-        if dest.exists():
-            print(f"  Removing existing {dest_name}...")
-            shutil.rmtree(dest)
-        
-        # Copy folder
-        print(f"  Copying '{folder_name}' -> '{dest_name}' ({img_count} images)...")
-        shutil.copytree(folder_path, dest)
-        copied_folders.append(dest_name)
-    
-    if skipped_folders:
-        print(f"\nSkipped folders: {skipped_folders}")
-    
-    if len(copied_folders) > 0:
-        print(f"\nSuccessfully copied {len(copied_folders)} incident severity classes to {raw_path}")
-        print(f"Classes: {copied_folders}")
-        
-        # Count total images
-        total_images = count_images(raw_path)
-        print(f"Total images: {total_images}")
-        
-        return True
-    else:
-        print("No valid incident severity folders found to copy")
-        return False
-
-
-def download_with_kagglehub(dataset_name="prajwalbhamere/car-damage-severity-dataset"):
-    """
-    Download dataset using kagglehub (newer, easier method)
-    
-    Args:
-        dataset_name (str): Kaggle dataset identifier
-    
-    Returns:
-        tuple: (success: bool, download_path: str)
+        tuple: (success, path)
     """
     try:
         import kagglehub
         
-        print("Using kagglehub to download dataset...")
-        print(f"Dataset: {dataset_name}")
-        print("This may take a few minutes depending on your internet speed...")
-        print()
+        print(f"\n[DOWNLOADING] {description}")
+        print(f"Dataset: {dataset_id}")
+        print("Please wait...")
         
-        # Download dataset - kagglehub handles everything automatically
-        path = kagglehub.dataset_download(dataset_name)
-        
-        print(f"\nDataset downloaded successfully!")
-        print(f"Path to dataset files: {path}")
-        
+        path = kagglehub.dataset_download(dataset_id)
+        print(f"[OK] Downloaded to: {path}")
         return True, path
-        
-    except ImportError:
-        print("kagglehub is not installed.")
-        print("Install it with: pip install kagglehub")
-        return False, None
     except Exception as e:
-        print(f"Error downloading with kagglehub: {e}")
-        print("\nTrying traditional Kaggle API method...")
+        print(f"[ERROR] Failed to download {dataset_id}: {e}")
         return False, None
 
 
-def download_with_kaggle_api(dataset_name, download_path="data/raw"):
+def find_all_images_recursive(root_path, extensions=('.jpg', '.jpeg', '.png', '.bmp')):
     """
-    Download dataset using traditional Kaggle API
+    Recursively find all images in a directory
     
     Args:
-        dataset_name (str): Kaggle dataset identifier
-        download_path (str): Path to download the dataset
+        root_path: Root directory to search
+        extensions: Tuple of valid image extensions
     
     Returns:
-        tuple: (success: bool, download_path: str)
+        list: List of image file paths
     """
-    print(f"Using Kaggle API to download dataset...")
-    print(f"Dataset: {dataset_name}")
-    print(f"Download path: {download_path}")
+    images = []
+    for ext in extensions:
+        images.extend(root_path.rglob(f'*{ext}'))
+        images.extend(root_path.rglob(f'*{ext.upper()}'))
+    return images
+
+
+def classify_and_copy_images(source_paths, target_class, raw_dir, batch_name=""):
+    """
+    Copy images from source to target class folder
     
-    # Create download directory
-    Path(download_path).mkdir(parents=True, exist_ok=True)
+    Args:
+        source_paths: List of source directories or single directory
+        target_class: Target class name (none/minor/moderate/severe)
+        raw_dir: Raw backup directory
+        batch_name: Optional batch identifier for naming
     
-    try:
-        import subprocess
+    Returns:
+        int: Number of images copied
+    """
+    if not isinstance(source_paths, list):
+        source_paths = [source_paths]
+    
+    target_dir = raw_dir / target_class
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
+    copied_count = 0
+    existing_count = len(list(target_dir.glob('*.jpg'))) + len(list(target_dir.glob('*.png')))
+    
+    for source_path in source_paths:
+        source_path = Path(source_path)
+        if not source_path.exists():
+            print(f"[WARNING] Source path does not exist: {source_path}")
+            continue
         
-        # Download using Kaggle API
-        cmd = f"kaggle datasets download -d {dataset_name} -p {download_path} --unzip"
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        # Find all images recursively
+        images = find_all_images_recursive(source_path)
         
-        if result.returncode == 0:
-            print("Download successful!")
-            return True, download_path
-        else:
-            print(f"Download failed: {result.stderr}")
-            return False, None
+        if len(images) == 0:
+            print(f"[WARNING] No images found in: {source_path}")
+            continue
+        
+        print(f"  Found {len(images)} images in {source_path.name}")
+        
+        # Copy images with unique naming
+        for i, img_path in enumerate(images):
+            # Create unique filename
+            if batch_name:
+                new_name = f"{target_class}_{batch_name}_{existing_count + i:05d}{img_path.suffix}"
+            else:
+                new_name = f"{target_class}_{existing_count + i:05d}{img_path.suffix}"
             
-    except Exception as e:
-        print(f"Error downloading dataset: {e}")
-        print("\nPlease ensure:")
-        print("1. Kaggle API is installed: pip install kaggle")
-        print("2. Kaggle API token is configured in ~/.kaggle/kaggle.json")
-        print("3. You have accepted the dataset's terms on Kaggle website")
-        return False, None
+            dest_path = target_dir / new_name
+            
+            try:
+                shutil.copy2(img_path, dest_path)
+                copied_count += 1
+                
+                # Progress indicator
+                if (i + 1) % 500 == 0:
+                    print(f"    Progress: {i+1}/{len(images)} images...")
+            except Exception as e:
+                print(f"[ERROR] Failed to copy {img_path.name}: {e}")
+    
+    return copied_count
 
 
-def manual_download_instructions():
-    """Print instructions for manual dataset download"""
-    print("\n" + "=" * 70)
-    print("MANUAL DOWNLOAD INSTRUCTIONS")
-    print("=" * 70)
-    print("\n1. Visit: https://www.kaggle.com/datasets/prajwalbhamere/car-damage-severity-dataset")
-    print("2. Click 'Download' button")
-    print("3. Extract the zip file to: data/raw/")
-    print("4. Keep only these 3 folders (delete no_damage/00-damage):")
-    print("   - 01-minor or minor_damage")
-    print("   - 02-moderate or moderate_damage")
-    print("   - 03-severe or severe_damage")
-    print("\n5. After extraction, run this script again")
-    print("=" * 70)
-
-
-def check_dataset_exists(raw_path="data/raw"):
+def organize_into_splits(raw_dir, organized_dir, train_split=0.70, val_split=0.15, random_seed=42):
     """
-    Check if dataset already exists in raw directory
-    Expects 3 classes: minor_damage, moderate_damage, severe_damage
+    Organize raw images into train/val/test splits
     
     Args:
-        raw_path (str): Path to raw dataset
+        raw_dir: Directory with raw images organized by class
+        organized_dir: Target directory for organized dataset
+        train_split: Training set proportion
+        val_split: Validation set proportion
+        random_seed: Random seed for reproducibility
     
     Returns:
-        bool: True if dataset exists, False otherwise
+        dict: Statistics about the organization
     """
-    raw_dir = Path(raw_path)
+    print("\n" + "="*70)
+    print("ORGANIZING INTO TRAIN/VAL/TEST SPLITS")
+    print(f"Split ratios: {train_split:.0%} train / {val_split:.0%} val / {1-train_split-val_split:.0%} test")
+    print("="*70)
     
-    # Check for our 3 incident severity classes
-    expected_folders = ['minor_damage', 'moderate_damage', 'severe_damage']
+    classes = ['none', 'minor', 'moderate', 'severe']
+    stats = {}
     
-    if not raw_dir.exists():
-        return False
-    
-    # Check if all expected folders exist and have images
-    all_exist = all((raw_dir / folder).exists() for folder in expected_folders)
-    if all_exist:
-        # Check if folders have images
-        has_images = all(
-            len(list((raw_dir / folder).glob('*.[jJ][pP][gG]'))) > 0 or
-            len(list((raw_dir / folder).glob('*.[pP][nN][gG]'))) > 0
-            for folder in expected_folders
-        )
-        if has_images:
-            return True
-    
-    # Check if there are any folders with images (alternative naming)
-    for item in raw_dir.iterdir():
-        if item.is_dir():
-            img_files = list(item.glob('*.[jJ][pP][gG]')) + \
-                       list(item.glob('*.[pP][nN][gG]'))
-            if len(img_files) > 10:  # At least 10 images
-                return True
-    
-    return False
-
-
-def organize_dataset(raw_path="data/raw", target_path="data/accident_images"):
-    """
-    Organize the downloaded dataset into train/val/test splits
-    Maps from raw folder names to our training folder names:
-    - minor_damage -> minor
-    - moderate_damage -> moderate
-    - severe_damage -> severe
-    
-    3 CLASSES ONLY (no "none" class)
-    
-    Args:
-        raw_path (str): Path to raw downloaded dataset
-        target_path (str): Path to organized dataset
-    
-    Returns:
-        bool: True if successful
-    """
-    print("\n" + "=" * 70)
-    print("Organizing dataset into train/val/test splits...")
-    print("Mapping: raw folder names -> training folder names")
-    print("  minor_damage -> minor")
-    print("  moderate_damage -> moderate")
-    print("  severe_damage -> severe")
-    print("\nNOTE: 3 classes only (Minor, Moderate, Severe)")
-    print("=" * 70)
-    
-    # Check if raw dataset exists
-    if not check_dataset_exists(raw_path):
-        print(f"Error: Dataset not found in {raw_path}")
-        print("Expected 3 folders: minor_damage, moderate_damage, severe_damage")
-        return False
-    
-    # Prepare dataset
-    try:
-        prepare_kaggle_dataset(
-            kaggle_dir=raw_path,
-            target_dir=target_path,
-            train_split=0.7,
-            val_split=0.15
-        )
-        print(f"\nDataset organized successfully in {target_path}")
+    for class_name in classes:
+        class_raw = raw_dir / class_name
         
-        # Show final structure
-        print("\nFinal structure (3 classes):")
-        print(f"{target_path}/")
-        for split in ['train', 'val', 'test']:
-            split_path = Path(target_path) / split
-            if split_path.exists():
-                print(f"  {split}/")
-                for class_folder in ['minor', 'moderate', 'severe']:
-                    class_path = split_path / class_folder
-                    if class_path.exists():
-                        count = len(list(class_path.glob('*.jpg'))) + len(list(class_path.glob('*.png')))
-                        print(f"    {class_folder}/ ({count} images)")
+        if not class_raw.exists():
+            print(f"\n[WARNING] {class_name.upper()}: Directory not found, skipping")
+            continue
         
-        return True
-    except Exception as e:
-        print(f"Error organizing dataset: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        # Get all images
+        images = list(class_raw.glob('*.jpg')) + list(class_raw.glob('*.png')) + \
+                list(class_raw.glob('*.jpeg')) + list(class_raw.glob('*.bmp'))
+        
+        if len(images) == 0:
+            print(f"\n[WARNING] {class_name.upper()}: No images found")
+            continue
+        
+        print(f"\n[PROCESSING] {class_name.upper()}: {len(images)} images")
+        
+        # Shuffle and split
+        import random
+        random.seed(random_seed)
+        random.shuffle(images)
+        
+        n_train = int(len(images) * train_split)
+        n_val = int(len(images) * val_split)
+        
+        train_images = images[:n_train]
+        val_images = images[n_train:n_train + n_val]
+        test_images = images[n_train + n_val:]
+        
+        # Copy to organized structure
+        splits = {
+            'train': train_images,
+            'val': val_images,
+            'test': test_images
+        }
+        
+        class_stats = {}
+        
+        for split_name, split_images in splits.items():
+            split_dir = organized_dir / split_name / class_name
+            split_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Copy images
+            copied = 0
+            for i, img in enumerate(split_images):
+                dest = split_dir / f"{class_name}_{split_name}_{i:05d}{img.suffix}"
+                try:
+                    shutil.copy2(img, dest)
+                    copied += 1
+                except Exception as e:
+                    print(f"[ERROR] Failed to copy to {split_name}: {e}")
+            
+            class_stats[split_name] = copied
+            print(f"  {split_name.upper()}: {copied} images copied")
+        
+        stats[class_name] = class_stats
+    
+    return stats
 
 
-def count_images(directory):
-    """Count total images in a directory"""
-    path = Path(directory)
-    if not path.exists():
-        return 0
+def print_final_summary(organized_dir, stats):
+    """Print final dataset statistics"""
+    print("\n" + "="*70)
+    print("DATASET ORGANIZATION COMPLETE!")
+    print("="*70)
     
-    image_extensions = ['.jpg', '.jpeg', '.png', '.bmp']
-    count = 0
+    total_by_split = {'train': 0, 'val': 0, 'test': 0}
+    total_by_class = {}
     
-    for ext in image_extensions:
-        count += len(list(path.rglob(f'*{ext}')))
-        count += len(list(path.rglob(f'*{ext.upper()}')))
+    print("\n[PER-CLASS DISTRIBUTION]")
+    for class_name in ['none', 'minor', 'moderate', 'severe']:
+        if class_name in stats:
+            class_stats = stats[class_name]
+            train_count = class_stats.get('train', 0)
+            val_count = class_stats.get('val', 0)
+            test_count = class_stats.get('test', 0)
+            total_class = train_count + val_count + test_count
+            
+            total_by_class[class_name] = total_class
+            total_by_split['train'] += train_count
+            total_by_split['val'] += val_count
+            total_by_split['test'] += test_count
+            
+            print(f"  {class_name.upper():>10s}: Train={train_count:4d} | Val={val_count:4d} | Test={test_count:4d} | Total={total_class:4d}")
     
-    return count
+    total_images = sum(total_by_class.values())
+    
+    print("\n[BY SPLIT]")
+    for split in ['train', 'val', 'test']:
+        count = total_by_split[split]
+        pct = (count / total_images * 100) if total_images > 0 else 0
+        print(f"  {split.upper():>5s}: {count:4d} images ({pct:.1f}%)")
+    
+    print(f"\n[TOTAL]: {total_images} images across 4 classes")
+    
+    # Quality assessment
+    print("\n[QUALITY ASSESSMENT]")
+    if total_images >= 8000:
+        grade = "A+ [EXCELLENT - Top-tier dataset]"
+    elif total_images >= 6000:
+        grade = "A [EXCELLENT]"
+    elif total_images >= 4000:
+        grade = "B+ [VERY GOOD]"
+    elif total_images >= 2500:
+        grade = "B [GOOD]"
+    else:
+        grade = "C [ACCEPTABLE but could use more data]"
+    
+    print(f"  Dataset Size: {grade}")
+    
+    # Balance check
+    if len(total_by_class) == 4:
+        max_class = max(total_by_class.values())
+        min_class = min(total_by_class.values())
+        imbalance_ratio = max_class / min_class if min_class > 0 else float('inf')
+        
+        if imbalance_ratio <= 2:
+            balance = "WELL BALANCED"
+        elif imbalance_ratio <= 3:
+            balance = "MODERATELY BALANCED"
+        else:
+            balance = "IMBALANCED (class weights recommended)"
+        
+        print(f"  Class Balance: {balance} (ratio: {imbalance_ratio:.2f}:1)")
+    
+    print("\n[SAVED TO]")
+    print(f"  Organized: {organized_dir.absolute()}")
+    print(f"  Raw backup: {organized_dir.parent / 'raw'}")
 
 
 def main():
-    print("=" * 70)
-    print("Kaggle Dataset Preparation Script")
-    print("Traffic Incident Severity Classification Dataset")
-    print("=" * 70)
-    print("\nIMPORTANT: This dataset has 3 classes (not 4)")
-    print("Classes: Minor, Moderate, Severe")
-    print("(No 'none' class - we only classify existing incidents)")
-    print("=" * 70)
-    print("\nThis script performs three steps:")
-    print("1. Download from Kaggle (to kagglehub cache)")
-    print("2. Copy to data/raw/ (3 severity classes only)")
-    print("3. Organize to data/accident_images/ (train/val/test splits)")
-    print("=" * 70)
+    print("="*70)
+    print("MULTI-DATASET PREPARATION FOR 4-CLASS INCIDENT CLASSIFICATION")
+    print("Classes: None, Minor, Moderate, Severe")
+    print("="*70)
     
-    RAW_PATH = "data/raw"
-    TARGET_PATH = "data/accident_images"
-    DATASET_NAME = "prajwalbhamere/car-damage-severity-dataset"
+    # Paths
+    RAW_DIR = Path("data/raw")
+    ORGANIZED_DIR = Path("data/accident_images")
     
     # Check if organized dataset already exists
-    if check_dataset_exists(TARGET_PATH + "/train"):
-        print(f"\nOrganized dataset already exists in {TARGET_PATH}")
-        train_count = count_images(TARGET_PATH + "/train")
-        val_count = count_images(TARGET_PATH + "/val")
-        test_count = count_images(TARGET_PATH + "/test")
-        print(f"  Train images: {train_count}")
-        print(f"  Val images: {val_count}")
-        print(f"  Test images: {test_count}")
-        print(f"  Total: {train_count + val_count + test_count}")
+    if ORGANIZED_DIR.exists() and len(list(ORGANIZED_DIR.rglob('*.jpg'))) > 0:
+        print(f"\n[INFO] Organized dataset already exists")
         
-        response = input("\nDo you want to re-organize the dataset? (y/n): ")
+        # Count existing images
+        train_count = len(list((ORGANIZED_DIR / 'train').rglob('*.jpg')))
+        val_count = len(list((ORGANIZED_DIR / 'val').rglob('*.jpg')))
+        test_count = len(list((ORGANIZED_DIR / 'test').rglob('*.jpg')))
+        total = train_count + val_count + test_count
+        
+        print(f"  Train: {train_count} images")
+        print(f"  Val: {val_count} images")
+        print(f"  Test: {test_count} images")
+        print(f"  TOTAL: {total} images")
+        
+        response = input("\nRe-download and reorganize ALL datasets? (y/n): ")
         if response.lower() != 'y':
-            print("Exiting...")
+            print("[INFO] Using existing dataset")
             return
+        
+        # Clean up
+        print("\n[INFO] Removing old data...")
+        if RAW_DIR.exists():
+            shutil.rmtree(RAW_DIR)
+        if ORGANIZED_DIR.exists():
+            shutil.rmtree(ORGANIZED_DIR)
+        time.sleep(1)
     
-    # Check if raw dataset exists
-    if check_dataset_exists(RAW_PATH):
-        print(f"\nRaw dataset found in {RAW_PATH}")
-        raw_count = count_images(RAW_PATH)
-        print(f"Total images in raw dataset: {raw_count}")
+    # Create directories
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    
+    print("\n" + "="*70)
+    print("DOWNLOADING DATASETS FROM KAGGLE")
+    print("This will download ~5-8 GB of data (may take 10-30 minutes)")
+    print("="*70)
+    
+    # Dataset definitions
+    datasets = [
+        {
+            'id': 'kshitij192/cars-image-dataset',
+            'class': 'none',
+            'description': 'Clean Cars Dataset (No Damage)',
+            'batch': 'clean'
+        },
+        {
+            'id': 'prajwalbhamere/car-damage-severity-dataset',
+            'class': 'mixed',  # Will be split by folder
+            'description': 'Car Damage Severity Dataset (Mixed)',
+            'batch': 'severity'
+        },
+        {
+            'id': 'abdulrahmankerim/crash-car-image-hybrid-dataset-ccih',
+            'class': 'minor',
+            'description': 'Crash Car Hybrid Dataset (Minor)',
+            'batch': 'hybrid'
+        },
+        {
+            'id': 'marslanarshad/car-accidents-and-deformation-datasetannotated',
+            'class': 'moderate',
+            'description': 'Car Accidents & Deformation Dataset (Moderate)',
+            'batch': 'deform'
+        },
+        {
+            'id': 'exameese/accident-severity-image-dataset-v4',
+            'class': 'severe',
+            'description': 'Accident Severity Dataset v4 (Severe)',
+            'batch': 'severity_v4'
+        }
+    ]
+    
+    # Download and organize each dataset
+    downloaded_paths = []
+    
+    for idx, dataset in enumerate(datasets, 1):
+        print(f"\n[{idx}/{len(datasets)}] " + "="*50)
+        success, path = download_dataset(dataset['id'], dataset['description'])
         
-        # Organize dataset
-        if organize_dataset(RAW_PATH, TARGET_PATH):
-            print("\n" + "=" * 70)
-            print("SUCCESS! Dataset is ready for training")
-            print("Dataset has 3 classes: Minor, Moderate, Severe")
-            print("=" * 70)
-        
-    else:
-        print(f"\nRaw dataset not found in {RAW_PATH}")
-        print("\nAttempting to download from Kaggle...")
-        
-        # Try kagglehub first (easier, no authentication needed)
-        success, download_path = download_with_kagglehub(DATASET_NAME)
-        
-        if success and download_path:
-            # Copy from kagglehub cache to our data/raw
-            if copy_kagglehub_dataset_to_raw(download_path, RAW_PATH):
-                # Organize dataset
-                if organize_dataset(RAW_PATH, TARGET_PATH):
-                    print("\n" + "=" * 70)
-                    print("SUCCESS! Dataset is ready for training")
-                    print("Dataset has 3 classes: Minor, Moderate, Severe")
-                    print("=" * 70)
-            else:
-                print("\nFailed to copy dataset from kagglehub cache")
-                manual_download_instructions()
+        if success and path:
+            downloaded_paths.append({
+                'path': path,
+                'class': dataset['class'],
+                'batch': dataset['batch']
+            })
         else:
-            # Try traditional Kaggle API
-            success, download_path = download_with_kaggle_api(DATASET_NAME, RAW_PATH)
-            
-            if success:
-                # Organize dataset
-                if organize_dataset(RAW_PATH, TARGET_PATH):
-                    print("\n" + "=" * 70)
-                    print("SUCCESS! Dataset is ready for training")
-                    print("Dataset has 3 classes: Minor, Moderate, Severe")
-                    print("=" * 70)
-            else:
-                # Provide manual download instructions
-                manual_download_instructions()
-                print("\nAfter manual download, run this script again.")
+            print(f"[WARNING] Skipping {dataset['description']}")
+        
+        time.sleep(1)  # Brief pause between downloads
     
-    print("\n" + "=" * 70)
-    print("Dataset preparation complete!")
-    print("=" * 70)
-    print("\nNext steps:")
-    print("Verify the dataset structure in data/accident_images/")
-    print("=" * 70)
+    if len(downloaded_paths) == 0:
+        print("\n[ERROR] No datasets were downloaded successfully!")
+        print("Please check your internet connection and Kaggle API setup")
+        return
+    
+    # Organize downloaded datasets into class folders
+    print("\n" + "="*70)
+    print("ORGANIZING DOWNLOADED DATASETS INTO CLASS FOLDERS")
+    print("="*70)
+    
+    total_copied = {'none': 0, 'minor': 0, 'moderate': 0, 'severe': 0}
+    
+    for dl in downloaded_paths:
+        path = Path(dl['path'])
+        class_type = dl['class']
+        batch = dl['batch']
+        
+        print(f"\n[PROCESSING] {batch} dataset")
+        
+        if class_type == 'mixed':
+            # Handle prajwalbhamere dataset (has folder structure)
+            print("  Detecting class folders...")
+            
+            # Find class-specific folders
+            minor_paths = []
+            moderate_paths = []
+            severe_paths = []
+            
+            for item in path.rglob('*'):
+                if item.is_dir():
+                    folder_name = item.name.lower()
+                    
+                    # Check if folder has images
+                    img_count = len(find_all_images_recursive(item))
+                    if img_count < 10:
+                        continue
+                    
+                    # Classify folder
+                    if any(kw in folder_name for kw in ['01', 'minor', 'light']):
+                        minor_paths.append(item)
+                        print(f"    Found MINOR: {item.name} ({img_count} images)")
+                    elif any(kw in folder_name for kw in ['02', 'moderate', 'medium']):
+                        moderate_paths.append(item)
+                        print(f"    Found MODERATE: {item.name} ({img_count} images)")
+                    elif any(kw in folder_name for kw in ['03', 'severe', 'heavy']):
+                        severe_paths.append(item)
+                        print(f"    Found SEVERE: {item.name} ({img_count} images)")
+            
+            # Copy to respective classes
+            if minor_paths:
+                print(f"\n  Copying to MINOR class...")
+                count = classify_and_copy_images(minor_paths, 'minor', RAW_DIR, batch)
+                total_copied['minor'] += count
+                print(f"    [OK] Copied {count} images")
+            
+            if moderate_paths:
+                print(f"\n  Copying to MODERATE class...")
+                count = classify_and_copy_images(moderate_paths, 'moderate', RAW_DIR, batch)
+                total_copied['moderate'] += count
+                print(f"    [OK] Copied {count} images")
+            
+            if severe_paths:
+                print(f"\n  Copying to SEVERE class...")
+                count = classify_and_copy_images(severe_paths, 'severe', RAW_DIR, batch)
+                total_copied['severe'] += count
+                print(f"    [OK] Copied {count} images")
+        
+        else:
+            # Single-class dataset
+            print(f"  Copying to {class_type.upper()} class...")
+            count = classify_and_copy_images(path, class_type, RAW_DIR, batch)
+            total_copied[class_type] += count
+            print(f"    [OK] Copied {count} images")
+    
+    # Summary of raw organization
+    print("\n" + "="*70)
+    print("RAW DATASET ORGANIZATION SUMMARY")
+    print("="*70)
+    for class_name, count in total_copied.items():
+        print(f"  {class_name.upper():>10s}: {count:5d} images")
+    print(f"  {'TOTAL':>10s}: {sum(total_copied.values()):5d} images")
+    
+    # Organize into train/val/test splits
+    stats = organize_into_splits(RAW_DIR, ORGANIZED_DIR)
+    
+    # Print final summary
+    print_final_summary(ORGANIZED_DIR, stats)
+    
+    print("\n" + "="*70)
+    print("SETUP COMPLETE!")
+    print("="*70)
+    print("\n[NEXT STEPS]")
+    print("  1. python src/data_processing.py  # Verify dataset")
+    print("  2. python src/train_cnn.py        # Train CNN model")
+    print("\n[EXPECTED RESULTS]")
+    print("  - With 6000+ images: 90-95% accuracy achievable")
+    print("  - With 8000+ images: 92-96% accuracy achievable")
+    print("  - Training time: 20-40 minutes (GPU) / 4-6 hours (CPU)")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n[INTERRUPTED] Dataset preparation cancelled by user")
+    except Exception as e:
+        print(f"\n[ERROR] Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()

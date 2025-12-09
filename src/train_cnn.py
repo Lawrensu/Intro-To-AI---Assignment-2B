@@ -6,12 +6,20 @@ Run this to train the ResNet-18 based incident classifier
 import torch
 import sys
 from pathlib import Path
+import numpy as np
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.data_processing import create_dataloaders, evaluate_dataset_sufficiency
 from src.models.cnn_model import IncidentCNN, CNNTrainer
+
+
+def get_class_distribution(dataset):
+    """Get class distribution from ImageFolder dataset"""
+    targets = dataset.targets
+    unique, counts = np.unique(targets, return_counts=True)
+    return dict(zip(unique.tolist(), counts.tolist()))
 
 
 def main():
@@ -52,51 +60,133 @@ def main():
     )
     
     # Get class distribution for weighting
-    train_dist = datasets['train'].get_class_distribution()
+    train_dist = get_class_distribution(datasets['train'])
     class_counts = [train_dist.get(i, 0) for i in range(4)]
+    
+    print(f"\n[INFO] Class distribution in training set:")
+    for i, count in enumerate(class_counts):
+        class_name = datasets['train'].classes[i]
+        print(f"  {class_name:>10s}: {count:4d} images ({count/sum(class_counts)*100:.1f}%)")
     
     # Create model
     print("\nStep 3: Creating model...")
-    model = IncidentCNN(num_classes=4, pretrained=True, freeze_backbone=False)
-    print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
-    print(f"Trainable parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
+    model = IncidentCNN(num_classes=4, pretrained=True)
+    
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    print(f"[OK] Model created successfully")
+    print(f"  Total parameters: {total_params:,}")
+    print(f"  Trainable parameters: {trainable_params:,}")
+    print(f"  Architecture: ResNet-18")
+    print(f"  Number of classes: 4")
     
     # Create trainer
-    trainer = CNNTrainer(model, device=DEVICE, learning_rate=LEARNING_RATE)
+    trainer = CNNTrainer(model, device=DEVICE)
     
-    # Set class weights if dataset is imbalanced
+    # Calculate class weights for imbalanced dataset
+    class_weights = None
     if max(class_counts) / min(class_counts) > 2:
-        print("\nDataset is imbalanced. Setting class weights...")
-        trainer.set_class_weights(class_counts)
+        print("\n[INFO] Dataset is imbalanced. Calculating class weights...")
+        total_samples = sum(class_counts)
+        class_weights = torch.FloatTensor([
+            total_samples / (4 * count) if count > 0 else 0 
+            for count in class_counts
+        ])
+        print(f"  Class weights: {class_weights.numpy()}")
     
     # Train model
     print("\nStep 4: Training model...")
+    print("=" * 70)
+    
     history = trainer.train(
-        dataloaders['train'], 
-        dataloaders['val'], 
+        dataloaders=dataloaders,
         num_epochs=NUM_EPOCHS,
+        learning_rate=LEARNING_RATE,
+        class_weights=class_weights,
+        patience=5,
         save_path=MODEL_SAVE_PATH
     )
     
-    # Plot training history
-    print("\nStep 5: Plotting training history...")
-    trainer.plot_training_history('models/cnn_training_history.png')
-    
     # Evaluate on test set
-    print("\nStep 6: Evaluating on test set...")
+    print("\nStep 5: Evaluating on test set...")
     results = trainer.evaluate(dataloaders['test'])
     
-    # Plot confusion matrix
-    trainer.plot_confusion_matrix(
-        results['confusion_matrix'], 
-        datasets['test'].classes,
-        'models/cnn_confusion_matrix.png'
-    )
+    print(f"\n[RESULTS] Test Set Performance:")
+    print(f"  Overall Accuracy: {results['accuracy']:.4f}")
+    print(f"  Precision: {results['precision']:.4f}")
+    print(f"  Recall: {results['recall']:.4f}")
+    print(f"  F1-Score: {results['f1_score']:.4f}")
+    
+    print(f"\n[PER-CLASS] Performance:")
+    for class_name, metrics in results['per_class_metrics'].items():
+        print(f"\n  {class_name.upper()}:")
+        print(f"    Precision: {metrics['precision']:.4f}")
+        print(f"    Recall: {metrics['recall']:.4f}")
+        print(f"    F1-Score: {metrics['f1_score']:.4f}")
+    
+    # Save confusion matrix
+    print("\nStep 6: Generating visualizations...")
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(results['confusion_matrix'], annot=True, fmt='d', cmap='Blues',
+                xticklabels=datasets['test'].classes,
+                yticklabels=datasets['test'].classes)
+    plt.title('CNN Confusion Matrix (Test Set)', fontsize=16, fontweight='bold')
+    plt.ylabel('True Label', fontsize=12)
+    plt.xlabel('Predicted Label', fontsize=12)
+    plt.tight_layout()
+    plt.savefig('models/cnn_confusion_matrix.png', dpi=300, bbox_inches='tight')
+    print("[OK] Confusion matrix saved to: models/cnn_confusion_matrix.png")
+    plt.close()
+    
+    # Save training history plot
+    plt.figure(figsize=(12, 5))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(history['train_loss'], label='Train Loss', linewidth=2)
+    plt.plot(history['val_loss'], label='Val Loss', linewidth=2)
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.title('Training and Validation Loss', fontsize=14, fontweight='bold')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(history['train_acc'], label='Train Acc', linewidth=2)
+    plt.plot(history['val_acc'], label='Val Acc', linewidth=2)
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Accuracy', fontsize=12)
+    plt.title('Training and Validation Accuracy', fontsize=14, fontweight='bold')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('models/cnn_training_history.png', dpi=300, bbox_inches='tight')
+    print("[OK] Training history saved to: models/cnn_training_history.png")
+    plt.close()
+    
+    # Final summary
+    print("\n" + "=" * 70)
+    print("TRAINING COMPLETE!")
+    print("=" * 70)
+    print(f"\n[SAVED FILES]")
+    print(f"  Model checkpoint: {MODEL_SAVE_PATH}")
+    print(f"  Training curves: models/cnn_training_history.png")
+    print(f"  Confusion matrix: models/cnn_confusion_matrix.png")
+    
+    print(f"\n[FINAL RESULTS]")
+    print(f"  Best validation accuracy: {trainer.best_acc:.4f}")
+    print(f"  Test accuracy: {results['accuracy']:.4f}")
+    print(f"  Total training time: {sum(history.get('epoch_times', [0])):.1f} seconds")
     
     print("\n" + "=" * 70)
-    print("Training complete!")
-    print(f"Best model saved to: {MODEL_SAVE_PATH}")
-    print(f"Test accuracy: {results['accuracy']:.4f}")
+    print("[NEXT STEPS]")
+    print("  1. Check training curves: models/cnn_training_history.png")
+    print("  2. Review confusion matrix: models/cnn_confusion_matrix.png")
+    print("  3. Use model for predictions with src/models/cnn_model.py")
     print("=" * 70)
 
 
