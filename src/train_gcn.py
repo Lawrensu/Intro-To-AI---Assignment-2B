@@ -99,7 +99,10 @@ def plot_confusion_matrix(data, model, mask, class_names, save_path='models/gcn_
     print("\n" + "=" * 70)
     print("Classification Report (Test Set)")
     print("=" * 70)
-    print(classification_report(y_true, y_pred, target_names=class_names, digits=4))
+    # Get unique labels present in test set
+    labels_present = sorted(np.unique(np.concatenate([y_true, y_pred])))
+    target_names_present = [class_names[i] for i in labels_present]
+    print(classification_report(y_true, y_pred, labels=labels_present, target_names=target_names_present, digits=4))
 
 
 def calculate_metrics(data, model, mask):
@@ -112,7 +115,7 @@ def calculate_metrics(data, model, mask):
         mask: Evaluation mask
     
     Returns:
-        dict: Metrics dictionary
+        dict: Metrics dictionary with labels
     """
     model.eval()
     with torch.no_grad():
@@ -125,15 +128,20 @@ def calculate_metrics(data, model, mask):
     from sklearn.metrics import accuracy_score, precision_recall_fscore_support
     
     accuracy = accuracy_score(y_true, y_pred)
+    
+    # Get labels present in predictions and ground truth
+    labels_present = sorted(np.unique(np.concatenate([y_true, y_pred])))
+    
     precision, recall, f1, _ = precision_recall_fscore_support(
-        y_true, y_pred, average=None, zero_division=0
+        y_true, y_pred, labels=labels_present, average=None, zero_division=0
     )
     
     metrics = {
         'accuracy': accuracy,
         'precision': precision,
         'recall': recall,
-        'f1_score': f1
+        'f1_score': f1,
+        'labels_present': labels_present
     }
     
     return metrics
@@ -157,9 +165,12 @@ def print_evaluation_summary(metrics, class_names):
     print(f"{'Class':<20} {'Precision':<15} {'Recall':<15} {'F1-Score':<15}")
     print("-" * 70)
     
-    for i, class_name in enumerate(class_names):
-        print(f"{class_name:<20} {metrics['precision'][i]:<15.4f} "
-              f"{metrics['recall'][i]:<15.4f} {metrics['f1_score'][i]:<15.4f}")
+    # Only print metrics for classes present in test set
+    labels_present = metrics.get('labels_present', range(len(class_names)))
+    for idx, label_idx in enumerate(labels_present):
+        class_name = class_names[label_idx]
+        print(f"{class_name:<20} {metrics['precision'][idx]:<15.4f} "
+              f"{metrics['recall'][idx]:<15.4f} {metrics['f1_score'][idx]:<15.4f}")
     
     print("-" * 70)
 
