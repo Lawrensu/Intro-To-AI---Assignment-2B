@@ -13,9 +13,9 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional
 
 # Model configuration
-HIDDEN_DIM = 64
+HIDDEN_DIM = 16
 NUM_CLASSES = 3  # Low, Medium, High traffic flow levels
-DROPOUT = 0.5
+DROPOUT = 0.3
 
 
 class TrafficGCN(nn.Module):
@@ -114,7 +114,7 @@ class GCNTrainer:
             weight_decay=5e-4
         )
         self.best_val_acc = 0.0
-        self.best_model_wts = None
+        self.best_model_wts = model.state_dict().copy()
         self.history = {
             'train_loss': [],
             'train_acc': [],

@@ -144,18 +144,24 @@ def construct_graph(nodes: Dict, ways: List) -> Data:
     
     x = torch.tensor(node_features, dtype=torch.float)
     
+    # Create balanced labels based on percentiles
+    degree_percentiles = np.percentile(degrees, [33, 67])
+    
     # Create labels based on node degree (traffic flow proxy)
     # Low traffic (0): degree <= 2
     # Medium traffic (1): degree 3-4
     # High traffic (2): degree >= 5
     y = torch.zeros(num_nodes, dtype=torch.long)
     for i, degree in enumerate(degrees):
-        if degree <= 2:
-            y[i] = 0  # Low traffic (Minor)
-        elif degree <= 4:
-            y[i] = 1  # Medium traffic (Moderate)
+        if degree <= degree_percentiles[0]:
+            y[i] = 0  # Low traffic (bottom 33%)
+        elif degree <= degree_percentiles[1]:
+            y[i] = 1  # Medium traffic (middle 33%)
         else:
-            y[i] = 2  # High traffic (Severe)
+            y[i] = 2  # High traffic (top 33%)
+    
+    # Verify balance
+    print(f"  Balanced labels: Low={sum(y==0)}, Med={sum(y==1)}, High={sum(y==2)}")
     
     # Create train/val/test masks (70/15/15 split)
     indices = torch.randperm(num_nodes)
