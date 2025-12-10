@@ -133,42 +133,106 @@ def construct_graph(nodes: Dict, ways: List) -> Data:
     edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
     edge_attr = torch.tensor(edge_attr_list, dtype=torch.float).unsqueeze(1)
     
-    # Create node features: [lat, lon, norm_lat, norm_lon, degree]
+    # Calculate additional features
+    # Betweenness centrality (how many shortest paths pass through this node)
+    betweenness = np.zeros(num_nodes)
+    for i in range(num_nodes):
+        # Simple approximation: nodes with higher degree are more central
+        betweenness[i] = degrees[i] / (num_nodes - 1) if num_nodes > 1 else 0
+    
+    # Closeness centrality (inverse of average distance to all other nodes)
+    closeness = np.zeros(num_nodes)
+    for i in range(num_nodes):
+        # Approximation based on degree
+        closeness[i] = degrees[i] / max(degrees) if max(degrees) > 0 else 0
+    
+    # Distance from center (geographic)
+    center_lat = np.mean(lats)
+    center_lon = np.mean(lons)
+    dist_from_center = np.sqrt((lats - center_lat)**2 + (lons - center_lon)**2)
+    norm_dist_from_center = (dist_from_center - dist_from_center.min()) / (dist_from_center.max() - dist_from_center.min() + 1e-8)
+    
+    # Degree normalized
+    norm_degree = degrees / (max(degrees) + 1e-8)
+    
+    # Create node features: [lat, lon, norm_lat, norm_lon, degree, norm_degree, betweenness, closeness, dist_from_center]
     node_features = np.stack([
         lats,
         lons,
         norm_lats,
         norm_lons,
-        degrees
+        degrees,
+        norm_degree,
+        betweenness,
+        closeness,
+        norm_dist_from_center
     ], axis=1)
     
     x = torch.tensor(node_features, dtype=torch.float)
     
-    # Create labels based on node degree (traffic flow proxy)
-    # Low traffic (0): degree <= 2
-    # Medium traffic (1): degree 3-4
-    # High traffic (2): degree >= 5
+    # Create more realistic labels based on node importance
+    # Combine degree, centrality, and location to determine traffic level
+    # Tourist/cultural sites + high connectivity = high traffic
+    # NOTE: With only 15 nodes, we use a hybrid approach based on:
+    # - Connectivity (degree)
+    # - Location type (tourist attractions vs others)
+    # - Geographic centrality
     y = torch.zeros(num_nodes, dtype=torch.long)
-    for i, degree in enumerate(degrees):
-        if degree <= 2:
-            y[i] = 0  # Low traffic (Minor)
-        elif degree <= 4:
-            y[i] = 1  # Medium traffic (Moderate)
+    
+    # Define important heritage/tourist nodes (from node labels)
+    # These are major attractions that typically have high traffic
+    high_traffic_keywords = ['Waterfront', 'Plaza', 'Museum', 'Courthouse', 'Cathedral', 'Padang Merdeka']
+    medium_traffic_keywords = ['Masjid', 'Art', 'Junction', 'Car Park', 'Wisma', 'Monument']
+    
+    for i, node_id in enumerate(node_list):
+        node_label = nodes[node_id]['label']
+        node_degree = degrees[i]
+        is_central = norm_dist_from_center[i] < 0.3  # Central location
+        
+        # Determine traffic level based on location type and connectivity
+        is_high_traffic = any(keyword in node_label for keyword in high_traffic_keywords)
+        is_medium_traffic = any(keyword in node_label for keyword in medium_traffic_keywords)
+        
+        # More nuanced classification
+        if (is_high_traffic and node_degree >= 4) or (node_degree >= 6):
+            y[i] = 2  # High traffic (major attractions/hubs)
+        elif is_high_traffic or is_medium_traffic or node_degree >= 3:
+            y[i] = 1  # Medium traffic (moderate importance)
         else:
-            y[i] = 2  # High traffic (Severe)
+            y[i] = 0  # Low traffic (minor locations)
     
-    # Create train/val/test masks (70/15/15 split)
-    indices = torch.randperm(num_nodes)
-    train_size = int(0.7 * num_nodes)
-    val_size = int(0.15 * num_nodes)
+    # Create stratified train/val/test masks to ensure balanced class distribution
+    from sklearn.model_selection import train_test_split
     
+    # Get indices for each class
+    indices_array = np.arange(num_nodes)
+    y_numpy = y.numpy()
+    
+    # First split: train vs (val + test)
+    train_indices, temp_indices = train_test_split(
+        indices_array, 
+        test_size=0.3, 
+        stratify=y_numpy,
+        random_state=42
+    )
+    
+    # Second split: val vs test
+    y_temp = y_numpy[temp_indices]
+    val_indices, test_indices = train_test_split(
+        temp_indices,
+        test_size=0.5,
+        stratify=y_temp,
+        random_state=42
+    )
+    
+    # Create masks
     train_mask = torch.zeros(num_nodes, dtype=torch.bool)
     val_mask = torch.zeros(num_nodes, dtype=torch.bool)
     test_mask = torch.zeros(num_nodes, dtype=torch.bool)
     
-    train_mask[indices[:train_size]] = True
-    val_mask[indices[train_size:train_size + val_size]] = True
-    test_mask[indices[train_size + val_size:]] = True
+    train_mask[train_indices] = True
+    val_mask[val_indices] = True
+    test_mask[test_indices] = True
     
     # Create Data object
     data = Data(
@@ -186,10 +250,13 @@ def construct_graph(nodes: Dict, ways: List) -> Data:
     data.node_to_idx = node_to_idx
     
     print(f"✓ Graph constructed successfully")
-    print(f"  Node features shape: {x.shape}")
+    print(f"  Node features shape: {x.shape} (9 features per node)")
     print(f"  Edge index shape: {edge_index.shape}")
     print(f"  Train/Val/Test: {train_mask.sum()}/{val_mask.sum()}/{test_mask.sum()}")
     print(f"  Class distribution: Low={sum(y==0)}, Medium={sum(y==1)}, High={sum(y==2)}")
+    print(f"  Train classes: Low={sum(y[train_mask]==0)}, Med={sum(y[train_mask]==1)}, High={sum(y[train_mask]==2)}")
+    print(f"  Val classes: Low={sum(y[val_mask]==0)}, Med={sum(y[val_mask]==1)}, High={sum(y[val_mask]==2)}")
+    print(f"  Test classes: Low={sum(y[test_mask]==0)}, Med={sum(y[test_mask]==1)}, High={sum(y[test_mask]==2)}")
     
     return data
 
