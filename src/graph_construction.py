@@ -283,3 +283,130 @@ if __name__ == "__main__":
         print(f"  Number of features: {data.num_node_features}")
     else:
         print(f"Network file not found: {network_file}")
+
+
+def is_near_incident(node: str, incident_node: str, edges: List[Dict]) -> bool:
+    """
+    Check if node is 1 hop away from incident node
+    
+    Args:
+        node: Node ID to check
+        incident_node: Incident location node ID
+        edges: List of edge dictionaries
+    
+    Returns:
+        bool: True if node is directly connected to incident node
+    """
+    for edge in edges:
+        if (edge['from'] == incident_node and edge['to'] == node) or \
+           (edge['to'] == incident_node and edge['from'] == node):
+            return True
+    return False
+
+
+def adjust_edge_weights_with_incident(
+    edges: List[Dict],
+    incident_node: str,
+    severity: str,
+    gcn_predictions: torch.Tensor,
+    node_to_idx: Dict
+) -> List[Dict]:
+    """
+    Adjust edge weights based on incident severity and GCN traffic flow predictions
+    
+    This function modifies edge travel times by:
+    1. Applying incident impact (high multiplier near incident)
+    2. Applying GCN traffic flow predictions (congestion factor)
+    3. Combining both factors for realistic routing
+    
+    Args:
+        edges: List of edge dictionaries with 'from', 'to', 'time_min'
+        incident_node: Node ID where incident occurred
+        severity: Incident severity ('none', 'minor', 'moderate', 'severe')
+        gcn_predictions: Tensor of traffic flow predictions per node (0=Low, 1=Med, 2=High)
+        node_to_idx: Dictionary mapping node IDs to tensor indices
+    
+    Returns:
+        List[Dict]: New list of edges with adjusted 'time_min' values
+    """
+    from copy import deepcopy
+    
+    # Severity multipliers from CNN predictions
+    severity_multipliers = {
+        'none': 1.0,
+        'minor': 1.2,
+        'moderate': 1.5,
+        'severe': 2.0
+    }
+    
+    # Traffic flow multipliers from GCN predictions
+    flow_multipliers = {
+        0: 1.0,  # Low traffic - normal flow
+        1: 1.3,  # Medium traffic - slight delay
+        2: 1.6   # High traffic - significant delay
+    }
+    
+    incident_multiplier = severity_multipliers.get(severity.lower(), 1.0)
+    adjusted_edges = deepcopy(edges)
+    
+    edges_modified = 0
+    edges_by_incident = 0
+    edges_by_traffic = 0
+    
+    for edge in adjusted_edges:
+        from_node = edge['from']
+        to_node = edge['to']
+        base_time = edge['time_min']
+        
+        # 1. Apply incident impact (affects nearby edges)
+        incident_impact = 1.0
+        if from_node == incident_node or to_node == incident_node:
+            # Direct impact on edges connected to incident (100% impact)
+            incident_impact = incident_multiplier
+            edges_by_incident += 1
+        elif is_near_incident(from_node, incident_node, adjusted_edges) or \
+             is_near_incident(to_node, incident_node, adjusted_edges):
+            # Reduced impact on nearby edges (50% impact, 1 hop away)
+            incident_impact = 1.0 + (incident_multiplier - 1.0) * 0.5
+            edges_by_incident += 1
+        
+        # 2. Apply GCN traffic flow predictions
+        from_idx = node_to_idx.get(from_node)
+        to_idx = node_to_idx.get(to_node)
+        
+        flow_impact = 1.0
+        if from_idx is not None and to_idx is not None:
+            # Average traffic flow of both endpoints
+            from_flow = int(gcn_predictions[from_idx].item())
+            to_flow = int(gcn_predictions[to_idx].item())
+            avg_flow = (from_flow + to_flow) / 2.0
+            
+            # Apply flow multiplier (interpolate for fractional flows)
+            if avg_flow <= 1.0:
+                flow_impact = flow_multipliers[0] + (flow_multipliers[1] - flow_multipliers[0]) * avg_flow
+            else:
+                flow_impact = flow_multipliers[1] + (flow_multipliers[2] - flow_multipliers[1]) * (avg_flow - 1.0)
+            
+            if flow_impact > 1.01:  # Count as modified if >1% increase
+                edges_by_traffic += 1
+        
+        # 3. Combine both factors multiplicatively
+        final_time = base_time * incident_impact * flow_impact
+        
+        # Store results
+        edge['time_min'] = final_time
+        edge['original_time'] = base_time
+        edge['incident_factor'] = incident_impact
+        edge['flow_factor'] = flow_impact
+        
+        if final_time > base_time * 1.01:  # >1% increase
+            edges_modified += 1
+    
+    # Print summary
+    print(f"\n  Edge Adjustment Summary:")
+    print(f"    Total edges: {len(adjusted_edges)}")
+    print(f"    Modified by incident: {edges_by_incident}")
+    print(f"    Modified by traffic: {edges_by_traffic}")
+    print(f"    Total modified: {edges_modified}")
+    
+    return adjusted_edges

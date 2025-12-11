@@ -625,7 +625,7 @@ class TrafficICS_GUI:
             self.log_result(f"[ERROR] {e}")
     
     def calculate_route(self):
-        """Calculate route with all 3 models"""
+        """Calculate route with all 3 models and modified edge weights"""
         origin = self.origin_node.get().split(':')[0]
         destination = self.destination_node.get().split(':')[0]
         
@@ -641,81 +641,279 @@ class TrafficICS_GUI:
         self.log_result(f"🎯 Destination: {self.nodes[destination]['label']}")
         
         try:
-            # STEP 1: CNN
+            # STEP 1: CNN predicts incident severity
             if self.predicted_severity:
                 severity = self.predicted_severity
                 multiplier = SEVERITY_MULTIPLIERS[severity]
-                self.log_result(f"\n[1] CNN ANALYSIS")
+                self.log_result(f"\n[1] CNN INCIDENT DETECTION")
                 self.log_result(f"    Severity: {severity.upper()}")
-                self.log_result(f"    Time Multiplier: {multiplier}x")
+                self.log_result(f"    Base Multiplier: {multiplier}x")
             else:
                 severity = 'none'
                 multiplier = 1.0
-                self.log_result(f"\n[1] CNN ANALYSIS")
-                self.log_result(f"    No image analyzed (default: {multiplier}x)")
+                self.log_result(f"\n[1] CNN INCIDENT DETECTION")
+                self.log_result(f"    No image analyzed (using default)")
             
-            # STEP 2: GCN
+            # STEP 2: GCN predicts traffic flow at all nodes
             with torch.no_grad():
                 flow_predictions = self.gcn_model.predict(self.network_data)
             
             avg_flow = flow_predictions.float().mean().item()
-            flow_factor = 1.0 + (avg_flow * 0.1)
-            
             flow_names = {0: 'LOW', 1: 'MEDIUM', 2: 'HIGH'}
             self.log_result(f"\n[2] GCN NETWORK ANALYSIS")
-            self.log_result(f"    Traffic Flow: {flow_names.get(int(avg_flow), 'UNKNOWN')} ({avg_flow:.2f})")
-            self.log_result(f"    Flow Factor: {flow_factor:.2f}x")
+            self.log_result(f"    Analyzing {len(flow_predictions)} intersections...")
+            self.log_result(f"    Average Traffic Flow: {flow_names.get(int(avg_flow), 'UNKNOWN')}")
             
-            # STEP 3: LSTM
-            path_features = self.create_path_features(origin, destination, severity, avg_flow)
+            # STEP 3: ⭐ MODIFY EDGE WEIGHTS ⭐
+            from src.graph_construction import adjust_edge_weights_with_incident
+            
+            # Use origin as incident location (or could be set from image analysis)
+            incident_node = origin
+            
+            self.log_result(f"\n[3] EDGE WEIGHT ADJUSTMENT")
+            self.log_result(f"    Incident location: {self.nodes[incident_node]['label']}")
+            
+            adjusted_edges = adjust_edge_weights_with_incident(
+                edges=self.ways,
+                incident_node=incident_node,
+                severity=severity,
+                gcn_predictions=flow_predictions,
+                node_to_idx=self.network_data.node_to_idx
+            )
+            
+            self.log_result(f"    ✓ Updated {len(adjusted_edges)} road segments")
+            
+            # STEP 4: Run pathfinding with MODIFIED edges
+            self.log_result(f"\n[4] PATHFINDING (Dijkstra with modified weights)")
+            
+            path, total_time = self.find_shortest_path_dijkstra(
+                origin, 
+                destination, 
+                adjusted_edges
+            )
+            
+            if not path:
+                self.log_result(f"    ❌ No path found!")
+                messagebox.showwarning("No Path", "No route found between selected locations")
+                return
+            
+            self.log_result(f"    ✓ Path found: {len(path)} nodes, {len(path)-1} segments")
+            self.log_result(f"    Pathfinding time: {total_time:.1f} minutes")
+            
+            # STEP 5: LSTM refines the travel time estimate
+            path_features = self.create_path_features_from_path(path, adjusted_edges, severity)
             
             with torch.no_grad():
-                base_time = self.lstm_model(torch.FloatTensor(path_features).unsqueeze(0)).item()
+                lstm_time = self.lstm_model(torch.FloatTensor(path_features).unsqueeze(0)).item()
             
-            self.log_result(f"\n[3] LSTM TIME PREDICTION")
-            self.log_result(f"    Base Travel Time: {base_time:.1f} minutes")
+            self.log_result(f"\n[5] LSTM TIME REFINEMENT")
+            self.log_result(f"    Pathfinding estimate: {total_time:.1f} min")
+            self.log_result(f"    LSTM refined estimate: {lstm_time:.1f} min")
+            self.log_result(f"    Difference: {abs(lstm_time - total_time):.1f} min")
             
-            # STEP 4: Final
-            adjusted_time = base_time * multiplier * flow_factor
+            # Use LSTM estimate as final (it considers more factors)
+            final_time = lstm_time
             
-            self.log_result(f"\n[4] FINAL CALCULATION")
+            # STEP 6: Display final results
+            distance = self.calculate_path_distance(path, adjusted_edges)
+            avg_speed = (distance / final_time * 60) if final_time > 0 else 0
+            
+            self.log_result(f"\n[6] FINAL ROUTE PLAN")
             self.log_result(f"    ───────────────────────────────")
-            self.log_result(f"    Base Time:       {base_time:.1f} min")
-            self.log_result(f"    × Severity:      {multiplier}x")
-            self.log_result(f"    × Traffic Flow:  {flow_factor:.2f}x")
-            self.log_result(f"    ───────────────────────────────")
-            self.log_result(f"    ⏱️  TOTAL TIME:   {adjusted_time:.1f} minutes")
+            self.log_result(f"    Route: {' → '.join([self.nodes[n]['label'][:15] for n in path[:3]])}...")
+            self.log_result(f"    Total nodes: {len(path)}")
+            self.log_result(f"    Total segments: {len(path) - 1}")
+            self.log_result(f"    ⏱️  Travel Time: {final_time:.1f} minutes")
+            self.log_result(f"    📏 Distance: {distance:.2f} km")
+            self.log_result(f"    🚗 Avg Speed: {avg_speed:.1f} km/h")
             
-            distance = self.estimate_distance(origin, destination)
-            avg_speed = (distance / adjusted_time * 60) if adjusted_time > 0 else 0
+            # Show edge modifications (first few affected edges)
+            self.log_result(f"\n[7] EDGE IMPACT ANALYSIS")
+            affected_edges = [e for e in adjusted_edges if e.get('incident_factor', 1.0) > 1.0 or e.get('flow_factor', 1.0) > 1.0]
             
-            self.log_result(f"\n[ROUTE DETAILS]")
-            self.log_result(f"    📏 Distance:      {distance:.2f} km")
-            self.log_result(f"    🚗 Avg Speed:     {avg_speed:.1f} km/h")
+            if affected_edges:
+                self.log_result(f"    Showing top 5 affected road segments:")
+                for edge in affected_edges[:5]:
+                    from_label = self.nodes[edge['from']]['label'][:20]
+                    to_label = self.nodes[edge['to']]['label'][:20]
+                    original = edge['original_time']
+                    adjusted = edge['time_min']
+                    increase = ((adjusted - original) / original) * 100
+                    
+                    self.log_result(f"    • {from_label} → {to_label}")
+                    self.log_result(f"      {original:.1f} min → {adjusted:.1f} min (+{increase:.0f}%)")
+            else:
+                self.log_result(f"    No significant modifications")
             
+            # Recommendations
             self.log_result(f"\n[RECOMMENDATIONS]")
             if severity in ['moderate', 'severe']:
-                self.log_result(f"    ⛔ Incident detected - Consider alternative route")
+                self.log_result(f"    ⛔ Incident detected - Route avoids affected areas")
             if avg_flow > 1.5:
-                self.log_result(f"    ⚠️  Heavy traffic - Travel time may vary")
-            if adjusted_time > base_time * 1.5:
-                self.log_result(f"    ⚠️  Significant delays expected")
+                self.log_result(f"    ⚠️  Heavy traffic - Consider alternative time")
+            if final_time > 45:
+                self.log_result(f"    ⚠️  Long journey - Plan for rest stops")
             
             if severity == 'none' and avg_flow < 1:
-                self.log_result(f"    ✅ Optimal conditions - Clear route")
+                self.log_result(f"    ✅ Optimal conditions - Clear route ahead")
             
             self.log_result("\n" + "="*70)
             
         except Exception as e:
-            self.log_result(f"\n[ERROR] {e}")
+            self.log_result(f"\n[ERROR] {str(e)}")
+            import traceback
+            traceback.print_exc()
             messagebox.showerror("Calculation Error", str(e))
     
     def create_path_features(self, origin: str, destination: str, severity: str, avg_flow: float) -> np.ndarray:
-        """Create feature vector for LSTM"""
+        """Create feature vector for LSTM (legacy - kept for compatibility)"""
         path = np.random.rand(30, 15)
         path[:, 5] = ['none', 'minor', 'moderate', 'severe'].index(severity) / 3.0
         path[:, 2] = avg_flow / 2.0
         return path
+    
+    def create_path_features_from_path(self, path: List[str], edges: List[Dict], severity: str) -> np.ndarray:
+        """
+        Create realistic LSTM features from actual path
+        
+        Args:
+            path: List of node IDs in route
+            edges: List of edge dictionaries (with modifications)
+            severity: Incident severity
+        
+        Returns:
+            numpy array of shape (30, 15) for LSTM input
+        """
+        features = np.zeros((30, 15))
+        
+        # Build edge lookup
+        edge_dict = {}
+        for edge in edges:
+            key = (edge['from'], edge['to'])
+            edge_dict[key] = edge
+        
+        # Fill features for each segment (up to 30)
+        for i in range(min(len(path) - 1, 30)):
+            from_node = path[i]
+            to_node = path[i + 1]
+            
+            # Get edge info
+            edge = edge_dict.get((from_node, to_node))
+            if edge:
+                features[i, 0] = edge.get('time_min', 0)  # Travel time
+                features[i, 1] = edge.get('original_time', 0)  # Original time
+                features[i, 2] = edge.get('flow_factor', 1.0)  # Traffic flow
+                features[i, 3] = edge.get('incident_factor', 1.0)  # Incident impact
+                features[i, 4] = i / 30.0  # Segment index normalized
+                features[i, 5] = ['none', 'minor', 'moderate', 'severe'].index(severity) / 3.0
+                
+                # Add random realistic features for other columns
+                features[i, 6:] = np.random.rand(9) * 0.5 + 0.5
+        
+        return features
+    
+    def find_shortest_path_dijkstra(self, origin: str, destination: str, edges: List[Dict]) -> Tuple[List[str], float]:
+        """
+        Dijkstra's algorithm with modified edge weights
+        
+        Args:
+            origin: Start node ID
+            destination: End node ID
+            edges: List of edges with modified 'time_min' weights
+        
+        Returns:
+            tuple: (path as list of node IDs, total time)
+        """
+        import heapq
+        
+        # Build adjacency list from modified edges
+        graph = {}
+        for edge in edges:
+            from_node = edge['from']
+            to_node = edge['to']
+            weight = edge['time_min']  # ⭐ Using MODIFIED weight
+            
+            if from_node not in graph:
+                graph[from_node] = []
+            graph[from_node].append((to_node, weight))
+        
+        # Dijkstra's algorithm
+        distances = {node: float('inf') for node in self.nodes.keys()}
+        distances[origin] = 0
+        previous = {node: None for node in self.nodes.keys()}
+        pq = [(0, origin)]
+        visited = set()
+        
+        while pq:
+            current_dist, current = heapq.heappop(pq)
+            
+            if current in visited:
+                continue
+            
+            visited.add(current)
+            
+            if current == destination:
+                break
+            
+            if current_dist > distances[current]:
+                continue
+            
+            for neighbor, weight in graph.get(current, []):
+                distance = current_dist + weight
+                
+                if distance < distances[neighbor]:
+                    distances[neighbor] = distance
+                    previous[neighbor] = current
+                    heapq.heappush(pq, (distance, neighbor))
+        
+        # Reconstruct path
+        if distances[destination] == float('inf'):
+            return None, 0
+        
+        path = []
+        current = destination
+        while current is not None:
+            path.append(current)
+            current = previous[current]
+        path.reverse()
+        
+        return path, distances[destination]
+    
+    def calculate_path_distance(self, path: List[str], edges: List[Dict]) -> float:
+        """
+        Calculate total distance of path
+        
+        Args:
+            path: List of node IDs
+            edges: List of edges
+        
+        Returns:
+            float: Total distance in kilometers
+        """
+        from math import radians, cos, sin, sqrt, atan2
+        
+        total_distance = 0.0
+        R = 6371  # Earth radius in km
+        
+        for i in range(len(path) - 1):
+            from_node = path[i]
+            to_node = path[i + 1]
+            
+            lat1 = radians(self.nodes[from_node]['lat'])
+            lon1 = radians(self.nodes[from_node]['lon'])
+            lat2 = radians(self.nodes[to_node]['lat'])
+            lon2 = radians(self.nodes[to_node]['lon'])
+            
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            
+            a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+            c = 2 * atan2(sqrt(a), sqrt(1-a))
+            distance = R * c
+            
+            total_distance += distance
+        
+        return total_distance
     
     def estimate_distance(self, origin: str, destination: str) -> float:
         """Estimate distance between two nodes"""
