@@ -1,458 +1,348 @@
 """
-10 COMPREHENSIVE TEST CASES - COS30019 Assignment 2B
-Tests 3 AI Models: CNN + LSTM + GCN
-Author: Cherylynn
+COMPREHENSIVE Test Suite - 3 Image Models + 6 Pathfinding Algorithms
+Tests all critical functionality
 """
 
 import sys
 from pathlib import Path
 import torch
 import numpy as np
-import time
-import json
 from datetime import datetime
+import json
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.models.cnn_model import load_cnn_model
-from src.models.rnn_model import TravelTimeLSTM, load_model
-from src.models.gcn_model import load_gcn_model
-from src.graph_construction import parse_road_network, construct_graph
+from src.models.image_models import (
+    load_resnet18, load_mobilenet, load_efficientnet,
+    predict_severity, get_edge_multiplier, ensemble_predict
+)
+from src.pathfinding_integration import PathfindingIntegration
+from src.graph_construction import parse_road_network
 
-# Test results storage
 TEST_RESULTS = []
 
-def log_test(test_name, passed, details=""):
+def log_test(name, passed, details=""):
     """Log test result"""
-    result = {
-        'name': test_name,
-        'passed': passed,
-        'details': details,
-        'timestamp': datetime.now().isoformat()
-    }
-    TEST_RESULTS.append(result)
-    status = "[PASS]" if passed else "[FAIL]"
-    print(f"\n{status}: {test_name}")
+    status = "PASS" if passed else "FAIL"
+    print(f"[{status}] {name}")
     if details:
-        print(f"  {details}")
+        print(f"     {details}")
+    
+    TEST_RESULTS.append({
+        'name': name,
+        'passed': passed,
+        'details': details
+    })
 
-# =============================================================================
-# TEST 1: All 3 Models Load Successfully
-# =============================================================================
 def test_1_models_load():
-    """Test if all 3 trained models (CNN, LSTM, GCN) load without errors"""
+    """Test if all 3 models load successfully"""
     print("\n" + "="*70)
-    print("TEST 1: Model Loading Verification (3 Models)")
+    print("TEST 1: Load All 3 Image Models")
     print("="*70)
     
     models_loaded = []
     
     try:
-        cnn = load_cnn_model('models/cnn_model.pth')
-        models_loaded.append('CNN')
-        print("[OK] CNN loaded (Image Classification)")
+        resnet = load_resnet18('models/resnet18_model.pth')
+        log_test("Load ResNet-18", True, "Model loaded successfully")
+        models_loaded.append(resnet)
     except Exception as e:
-        print(f"[ERROR] CNN failed: {e}")
+        log_test("Load ResNet-18", False, str(e))
+        return False
     
     try:
-        lstm = TravelTimeLSTM(15, 256, 2, bidirectional=True)
-        lstm = load_model(lstm, 'models/lstm_travel_time_model.pth')
-        models_loaded.append('LSTM')
-        print("[OK] LSTM loaded (Time Series Analysis)")
+        mobilenet = load_mobilenet('models/mobilenet_model.pth')
+        log_test("Load MobileNet-V2", True, "Model loaded successfully")
+        models_loaded.append(mobilenet)
     except Exception as e:
-        print(f"[ERROR] LSTM failed: {e}")
+        log_test("Load MobileNet-V2", False, str(e))
+        return False
     
     try:
-        gcn = load_gcn_model('models/gcn_model.pth', num_node_features=5)
-        models_loaded.append('GCN')
-        print("[OK] GCN loaded (Spatial Network Analysis)")
+        efficientnet = load_efficientnet('models/efficientnet_model.pth')
+        log_test("Load EfficientNet-B0", True, "Model loaded successfully")
+        models_loaded.append(efficientnet)
     except Exception as e:
-        print(f"[ERROR] GCN failed: {e}")
+        log_test("Load EfficientNet-B0", False, str(e))
+        return False
     
-    passed = len(models_loaded) == 3
-    log_test("All 3 Models Loading", passed, f"{len(models_loaded)}/3 models loaded successfully")
-    return passed
+    log_test("All 3 models loaded", True, f"{len(models_loaded)} models ready")
+    return True
 
-# =============================================================================
-# TEST 2: CNN Prediction Consistency
-# =============================================================================
-def test_2_cnn_consistency():
-    """Test if CNN gives consistent predictions for same input"""
+def test_2_model_inference():
+    """Test if models can make predictions"""
     print("\n" + "="*70)
-    print("TEST 2: CNN Image Classification Consistency")
+    print("TEST 2: Model Inference")
     print("="*70)
     
     try:
-        model = load_cnn_model('models/cnn_model.pth')
-        model.eval()
-        
+        resnet = load_resnet18('models/resnet18_model.pth')
         img = torch.randn(1, 3, 224, 224)
         
-        predictions = []
-        for i in range(3):
-            with torch.no_grad():
-                out = model(img)
-                pred = torch.argmax(out, dim=1).item()
-            predictions.append(pred)
+        severity, conf = predict_severity(resnet, img)
         
-        consistent = len(set(predictions)) == 1
+        valid_classes = ['none', 'minor', 'moderate', 'severe']
+        is_valid = severity in valid_classes and 0 <= conf <= 1
         
-        log_test("CNN Consistency", consistent, 
-                f"Predictions: {predictions} (consistent: {consistent})")
+        log_test("Model Inference", is_valid, f"Predicted: {severity} ({conf:.2%})")
+        return is_valid
+    except Exception as e:
+        log_test("Model Inference", False, str(e))
+        return False
+
+def test_3_consistency():
+    """Test if models give consistent predictions"""
+    print("\n" + "="*70)
+    print("TEST 3: Prediction Consistency")
+    print("="*70)
+    
+    try:
+        resnet = load_resnet18('models/resnet18_model.pth')
+        img = torch.randn(1, 3, 224, 224)
+        
+        preds = []
+        for _ in range(5):
+            sev, conf = predict_severity(resnet, img)
+            preds.append(sev)
+        
+        consistent = len(set(preds)) == 1
+        log_test("Consistency Check", consistent, f"5 predictions: {preds[0]}")
         return consistent
-        
     except Exception as e:
-        log_test("CNN Consistency", False, f"Error: {e}")
+        log_test("Consistency Check", False, str(e))
         return False
 
-# =============================================================================
-# TEST 3: LSTM Travel Time Bounds Check
-# =============================================================================
-def test_3_lstm_bounds():
-    """Test if LSTM predictions are within reasonable bounds (0-120 minutes)"""
+def test_4_ensemble():
+    """Test if ensemble voting works"""
     print("\n" + "="*70)
-    print("TEST 3: LSTM Travel Time Prediction Bounds")
+    print("TEST 4: Ensemble Voting")
     print("="*70)
     
     try:
-        model = TravelTimeLSTM(15, 256, 2, bidirectional=True)
-        model = load_model(model, 'models/lstm_travel_time_model.pth')
-        model.eval()
-        
-        times = []
-        for _ in range(10):
-            path = np.random.rand(30, 15)
-            with torch.no_grad():
-                pred_time = model(torch.FloatTensor(path).unsqueeze(0)).item()
-            times.append(pred_time)
-        
-        all_reasonable = all(0 < t < 120 for t in times)
-        
-        log_test("LSTM Time Bounds", all_reasonable,
-                f"Time range: {min(times):.1f}-{max(times):.1f} min (target: 0-120)")
-        return all_reasonable
-        
-    except Exception as e:
-        log_test("LSTM Time Bounds", False, f"Error: {e}")
-        return False
-
-# =============================================================================
-# TEST 4: GCN Spatial Network Analysis
-# =============================================================================
-def test_4_gcn_spatial():
-    """Test if GCN predicts traffic flow on road network"""
-    print("\n" + "="*70)
-    print("TEST 4: GCN Spatial Network Traffic Flow Prediction")
-    print("="*70)
-    
-    try:
-        nodes, ways, _, _ = parse_road_network('heritage_assignment_15_time_asymmetric-1.txt')
-        data = construct_graph(nodes, ways)
-        
-        model = load_gcn_model('models/gcn_model.pth', num_node_features=5)
-        model.eval()
-        
-        with torch.no_grad():
-            predictions = model.predict(data)
-        
-        valid_predictions = all(p in [0, 1, 2] for p in predictions.tolist())
-        diversity = len(set(predictions.tolist())) >= 2
-        
-        passed = valid_predictions and diversity
-        
-        log_test("GCN Spatial Analysis", passed,
-                f"Predictions: {len(set(predictions.tolist()))}/3 classes used")
-        return passed
-        
-    except Exception as e:
-        log_test("GCN Spatial Analysis", False, f"Error: {e}")
-        return False
-
-# =============================================================================
-# TEST 5: Real-Time Performance (All 3 Models)
-# =============================================================================
-def test_5_inference_speed():
-    """Test if all 3 models can predict within acceptable time (<3 seconds)"""
-    print("\n" + "="*70)
-    print("TEST 5: Real-Time Performance (All 3 Models)")
-    print("="*70)
-    
-    try:
-        cnn = load_cnn_model('models/cnn_model.pth')
-        lstm = TravelTimeLSTM(15, 256, 2, bidirectional=True)
-        lstm = load_model(lstm, 'models/lstm_travel_time_model.pth')
-        
-        nodes, ways, _, _ = parse_road_network('heritage_assignment_15_time_asymmetric-1.txt')
-        data = construct_graph(nodes, ways)
-        gcn = load_gcn_model('models/gcn_model.pth', num_node_features=5)
-        
-        cnn.eval()
-        lstm.eval()
-        gcn.eval()
-        
-        start = time.time()
-        
-        with torch.no_grad():
-            _ = cnn(torch.randn(1, 3, 224, 224))
-            _ = lstm(torch.randn(1, 30, 15))
-            _ = gcn.predict(data)
-        
-        elapsed = time.time() - start
-        passed = elapsed < 3.0
-        
-        log_test("Real-Time Performance", passed,
-                f"Total time: {elapsed*1000:.1f}ms (target: <3000ms)")
-        return passed
-        
-    except Exception as e:
-        log_test("Real-Time Performance", False, f"Error: {e}")
-        return False
-
-# =============================================================================
-# TEST 6: LSTM Rush Hour Detection
-# =============================================================================
-def test_6_rush_hour():
-    """Test if LSTM detects rush hour impacts (temporal pattern learning)"""
-    print("\n" + "="*70)
-    print("TEST 6: LSTM Rush Hour Detection (Kuching Traffic Patterns)")
-    print("="*70)
-    
-    try:
-        model = TravelTimeLSTM(15, 256, 2, bidirectional=True)
-        model = load_model(model, 'models/lstm_travel_time_model.pth')
-        model.eval()
-        
-        normal = np.random.rand(30, 15)
-        normal[:, 6] = 10/24
-        normal[:, 7] = 0.0
-        
-        rush = np.random.rand(30, 15)
-        rush[:, 6] = 8/24
-        rush[:, 7] = 1.0
-        
-        with torch.no_grad():
-            normal_time = model(torch.FloatTensor(normal).unsqueeze(0)).item()
-            rush_time = model(torch.FloatTensor(rush).unsqueeze(0)).item()
-        
-        reasonable = rush_time >= normal_time * 0.9
-        
-        log_test("LSTM Rush Hour Detection", reasonable,
-                f"Normal: {normal_time:.1f}min, Rush: {rush_time:.1f}min")
-        return reasonable
-        
-    except Exception as e:
-        log_test("LSTM Rush Hour Detection", False, f"Error: {e}")
-        return False
-
-# =============================================================================
-# TEST 7: LSTM Weekend vs Weekday Pattern
-# =============================================================================
-def test_7_weekly_cycle():
-    """Test if LSTM recognizes weekly traffic cycles"""
-    print("\n" + "="*70)
-    print("TEST 7: LSTM Weekly Cycle Pattern (Sarawak Context)")
-    print("="*70)
-    
-    try:
-        model = TravelTimeLSTM(15, 256, 2, bidirectional=True)
-        model = load_model(model, 'models/lstm_travel_time_model.pth')
-        model.eval()
-        
-        monday = np.random.rand(30, 15)
-        monday[:, 8] = 0/7
-        monday[:, 9] = 0.0
-        monday[:, 2] = 0.7
-        
-        sunday = np.random.rand(30, 15)
-        sunday[:, 8] = 6/7
-        sunday[:, 9] = 1.0
-        sunday[:, 2] = 0.3
-        
-        with torch.no_grad():
-            mon_time = model(torch.FloatTensor(monday).unsqueeze(0)).item()
-            sun_time = model(torch.FloatTensor(sunday).unsqueeze(0)).item()
-        
-        makes_sense = sun_time <= mon_time * 1.1
-        
-        log_test("LSTM Weekly Cycle", makes_sense,
-                f"Monday: {mon_time:.1f}min, Sunday: {sun_time:.1f}min")
-        return makes_sense
-        
-    except Exception as e:
-        log_test("LSTM Weekly Cycle", False, f"Error: {e}")
-        return False
-
-# =============================================================================
-# TEST 8: CNN + LSTM Incident Impact
-# =============================================================================
-def test_8_incident_impact():
-    """Test if CNN detects severity and LSTM adjusts travel time"""
-    print("\n" + "="*70)
-    print("TEST 8: CNN Severity + LSTM Time Adjustment")
-    print("="*70)
-    
-    try:
-        cnn = load_cnn_model('models/cnn_model.pth')
-        lstm = TravelTimeLSTM(15, 256, 2, bidirectional=True)
-        lstm = load_model(lstm, 'models/lstm_travel_time_model.pth')
-        
-        cnn.eval()
-        lstm.eval()
+        resnet = load_resnet18('models/resnet18_model.pth')
+        mobilenet = load_mobilenet('models/mobilenet_model.pth')
+        efficientnet = load_efficientnet('models/efficientnet_model.pth')
         
         img = torch.randn(1, 3, 224, 224)
-        with torch.no_grad():
-            severity = torch.argmax(cnn(img), dim=1).item()
         
-        clear = np.random.rand(30, 15)
-        clear[:, 5] = 0.0
+        models = [resnet, mobilenet, efficientnet]
+        ensemble_sev, ensemble_conf = ensemble_predict(models, img)
         
-        incident = np.random.rand(30, 15)
-        incident[:, 5] = severity / 3.0
+        valid_classes = ['none', 'minor', 'moderate', 'severe']
+        is_valid = ensemble_sev in valid_classes and 0 <= ensemble_conf <= 1
         
-        with torch.no_grad():
-            clear_time = lstm(torch.FloatTensor(clear).unsqueeze(0)).item()
-            incident_time = lstm(torch.FloatTensor(incident).unsqueeze(0)).item()
-        
-        reasonable = incident_time >= clear_time * 0.95
-        
-        log_test("CNN+LSTM Incident Impact", reasonable,
-                f"Clear: {clear_time:.1f}min, Incident: {incident_time:.1f}min")
-        return reasonable
-        
+        log_test("Ensemble Voting", is_valid, f"Ensemble: {ensemble_sev} ({ensemble_conf:.2%})")
+        return is_valid
     except Exception as e:
-        log_test("CNN+LSTM Incident Impact", False, f"Error: {e}")
+        log_test("Ensemble Voting", False, str(e))
         return False
 
-# =============================================================================
-# TEST 9: Model File Integrity
-# =============================================================================
-def test_9_file_integrity():
-    """Verify all 3 model files exist and have valid sizes"""
+def test_5_multipliers():
+    """Test if severity multipliers are correct"""
     print("\n" + "="*70)
-    print("TEST 9: Model File Integrity (3 Models)")
+    print("TEST 5: Edge Weight Multipliers")
+    print("="*70)
+    
+    expected = {
+        'none': 1.0,
+        'minor': 1.2,
+        'moderate': 1.5,
+        'severe': 2.0
+    }
+    
+    all_correct = True
+    for sev, expected_mult in expected.items():
+        actual_mult = get_edge_multiplier(sev)
+        if actual_mult != expected_mult:
+            all_correct = False
+            log_test(f"Multiplier {sev}", False, f"Expected {expected_mult}, got {actual_mult}")
+        else:
+            log_test(f"Multiplier {sev}", True, f"{expected_mult}x")
+    
+    return all_correct
+
+def test_6_pathfinding_load():
+    """Test if pathfinding graph loads"""
+    print("\n" + "="*70)
+    print("TEST 6: Pathfinding Graph Loading")
+    print("="*70)
+    
+    try:
+        nodes, ways, cameras, meta = parse_road_network('heritage_assignment_15_time_asymmetric-1.txt')
+        
+        graph = {}
+        for way in ways:
+            if way['from'] not in graph:
+                graph[way['from']] = []
+            graph[way['from']].append((way['to'], way['time_min']))
+        
+        pathfinder = PathfindingIntegration(graph, nodes)
+        
+        log_test("Graph Loading", True, f"{len(nodes)} nodes, {len(ways)} edges")
+        return True
+    except Exception as e:
+        log_test("Graph Loading", False, str(e))
+        return False
+
+def test_7_all_algorithms():
+    """Test if all 6 algorithms execute"""
+    print("\n" + "="*70)
+    print("TEST 7: 6 Pathfinding Algorithms")
+    print("="*70)
+    
+    try:
+        nodes, ways, cameras, meta = parse_road_network('heritage_assignment_15_time_asymmetric-1.txt')
+        
+        graph = {}
+        for way in ways:
+            if way['from'] not in graph:
+                graph[way['from']] = []
+            graph[way['from']].append((way['to'], way['time_min']))
+        
+        pathfinder = PathfindingIntegration(graph, nodes)
+        
+        algorithms = ['BFS', 'DFS', 'UCS', 'GBFS', 'A*', 'IDA*']
+        
+        all_work = True
+        for algo in algorithms:
+            try:
+                func = getattr(pathfinder, algo.lower().replace('*', 'star').replace('-', ''))
+                path, cost, expanded = func('1', '10')
+                if path:
+                    log_test(f"Algorithm {algo}", True, f"Cost: {cost:.1f}, Expanded: {expanded}")
+                else:
+                    log_test(f"Algorithm {algo}", False, "No path found")
+                    all_work = False
+            except Exception as e:
+                log_test(f"Algorithm {algo}", False, str(e))
+                all_work = False
+        
+        return all_work
+    except Exception as e:
+        log_test("6 Algorithms Execute", False, str(e))
+        return False
+
+def test_8_top3_selection():
+    """Test if top-3 algorithm selection works"""
+    print("\n" + "="*70)
+    print("TEST 8: Top-3 Algorithm Selection")
+    print("="*70)
+    
+    try:
+        nodes, ways, cameras, meta = parse_road_network('heritage_assignment_15_time_asymmetric-1.txt')
+        
+        graph = {}
+        for way in ways:
+            if way['from'] not in graph:
+                graph[way['from']] = []
+            graph[way['from']].append((way['to'], way['time_min']))
+        
+        pathfinder = PathfindingIntegration(graph, nodes)
+        
+        top3 = pathfinder.find_top3_algorithms('1', '10')
+        
+        has_top3 = len(top3) >= 3
+        
+        if has_top3:
+            algos = [r['algorithm'] for r in top3]
+            log_test("Top-3 Selection", True, f"Top 3: {', '.join(algos)}")
+        else:
+            log_test("Top-3 Selection", False, f"Only {len(top3)} algorithms returned")
+        
+        return has_top3
+    except Exception as e:
+        log_test("Top-3 Selection", False, str(e))
+        return False
+
+def test_9_severity_impact():
+    """Test if severity affects pathfinding"""
+    print("\n" + "="*70)
+    print("TEST 9: Severity Impact on Pathfinding")
+    print("="*70)
+    
+    try:
+        nodes, ways, cameras, meta = parse_road_network('heritage_assignment_15_time_asymmetric-1.txt')
+        
+        graph = {}
+        for way in ways:
+            if way['from'] not in graph:
+                graph[way['from']] = []
+            graph[way['from']].append((way['to'], way['time_min']))
+        
+        pathfinder = PathfindingIntegration(graph, nodes)
+        
+        path1, cost1, _ = pathfinder.ucs('1', '10')
+        
+        graph_modified = {}
+        for node in graph:
+            graph_modified[node] = [(n, w * 2.0) for n, w in graph[node]]
+        
+        pathfinder_modified = PathfindingIntegration(graph_modified, nodes)
+        path2, cost2, _ = pathfinder_modified.ucs('1', '10')
+        
+        impact_detected = cost2 >= cost1 * 1.5
+        
+        log_test("Severity Impact", impact_detected, f"Base: {cost1:.1f} -> Severe: {cost2:.1f}")
+        return impact_detected
+    except Exception as e:
+        log_test("Severity Impact", False, str(e))
+        return False
+
+def test_10_file_integrity():
+    """Test if all required files exist"""
+    print("\n" + "="*70)
+    print("TEST 10: File Integrity")
     print("="*70)
     
     required_files = [
-        'models/cnn_model.pth',
-        'models/lstm_travel_time_model.pth',
-        'models/gcn_model.pth'
+        'models/resnet18_model.pth',
+        'models/mobilenet_model.pth',
+        'models/efficientnet_model.pth',
+        'models/ResNet18_learning_curves.png',
+        'models/MobileNetV2_learning_curves.png',
+        'models/EfficientNet-B0_learning_curves.png',
+        'models/ResNet18_confusion_matrix.png',
+        'models/MobileNetV2_confusion_matrix.png',
+        'models/EfficientNet-B0_confusion_matrix.png',
+        'models/model_comparison.png'
     ]
     
-    files_ok = []
-    
+    all_exist = True
     for file in required_files:
-        path = Path(file)
-        if path.exists():
-            size = path.stat().st_size / (1024 * 1024)
-            print(f"[OK] {file} ({size:.1f} MB)")
-            files_ok.append(file)
+        exists = Path(file).exists()
+        if not exists:
+            all_exist = False
+            log_test(f"File: {Path(file).name}", False, "Missing")
         else:
-            print(f"[MISSING] {file}")
+            size = Path(file).stat().st_size / (1024*1024)
+            log_test(f"File: {Path(file).name}", True, f"{size:.1f} MB")
     
-    passed = len(files_ok) == len(required_files)
-    
-    log_test("Model File Integrity", passed,
-            f"{len(files_ok)}/{len(required_files)} model files found")
-    return passed
+    return all_exist
 
-# =============================================================================
-# TEST 10: Complete 3-Model Integration Pipeline
-# =============================================================================
-def test_10_complete_integration():
-    """Test complete 3-model integration: CNN + LSTM + GCN"""
-    print("\n" + "="*70)
-    print("TEST 10: Complete 3-Model Integration Pipeline")
-    print("="*70)
-    
-    try:
-        cnn = load_cnn_model('models/cnn_model.pth')
-        lstm = TravelTimeLSTM(15, 256, 2, bidirectional=True)
-        lstm = load_model(lstm, 'models/lstm_travel_time_model.pth')
-        
-        nodes, ways, _, _ = parse_road_network('heritage_assignment_15_time_asymmetric-1.txt')
-        data = construct_graph(nodes, ways)
-        gcn = load_gcn_model('models/gcn_model.pth', num_node_features=5)
-        
-        cnn.eval()
-        lstm.eval()
-        gcn.eval()
-        
-        print("\nExecuting 3-model pipeline:")
-        
-        # STEP 1: CNN predicts severity
-        img = torch.randn(1, 3, 224, 224)
-        with torch.no_grad():
-            severity = torch.argmax(cnn(img), dim=1).item()
-        
-        classes = ['none', 'minor', 'moderate', 'severe']
-        multipliers = [1.0, 1.2, 1.5, 2.0]
-        print(f"  [1] CNN: Severity = {classes[severity]}")
-        
-        # STEP 2: GCN predicts network traffic flow
-        with torch.no_grad():
-            flow_predictions = gcn.predict(data)
-        
-        avg_flow = flow_predictions.float().mean().item()
-        print(f"  [2] GCN: Average traffic flow = {avg_flow:.2f} (0=low, 1=med, 2=high)")
-        
-        # STEP 3: LSTM predicts travel time
-        path = np.random.rand(30, 15)
-        path[:, 5] = severity / 3.0
-        path[:, 2] = avg_flow / 2.0
-        
-        with torch.no_grad():
-            base_time = lstm(torch.FloatTensor(path).unsqueeze(0)).item()
-        
-        print(f"  [3] LSTM: Base travel time = {base_time:.1f} minutes")
-        
-        # STEP 4: Combine all factors
-        final_time = base_time * multipliers[severity] * (1.0 + avg_flow * 0.1)
-        
-        print(f"\n  [4] FINAL: Adjusted time = {final_time:.1f} minutes")
-        print(f"      (Base: {base_time:.1f} × Severity: {multipliers[severity]} × Flow factor: {1.0 + avg_flow*0.1:.2f})")
-        
-        pipeline_complete = (
-            0 <= severity <= 3 and
-            0 < base_time < 120 and
-            final_time >= base_time
-        )
-        
-        log_test("Complete 3-Model Integration", pipeline_complete,
-                f"All models executed successfully")
-        return pipeline_complete
-        
-    except Exception as e:
-        log_test("Complete 3-Model Integration", False, f"Error: {e}")
-        return False
-
-# =============================================================================
-# MAIN TEST RUNNER
-# =============================================================================
 def run_all_tests():
-    """Execute all 10 test cases and generate report"""
+    """Execute all test cases"""
     print("\n" + "="*70)
-    print("COMPREHENSIVE TEST SUITE - COS30019 ASSIGNMENT 2B")
-    print("Traffic Incident Classification System - Kuching, Sarawak")
-    print("Testing 3 AI Models: CNN + LSTM + GCN")
+    print("COMPREHENSIVE TEST SUITE - 10 TESTS")
+    print("3 Image Models + 6 Pathfinding Algorithms")
     print("="*70)
     
     tests = [
         test_1_models_load,
-        test_2_cnn_consistency,
-        test_3_lstm_bounds,
-        test_4_gcn_spatial,
-        test_5_inference_speed,
-        test_6_rush_hour,
-        test_7_weekly_cycle,
-        test_8_incident_impact,
-        test_9_file_integrity,
-        test_10_complete_integration
+        test_2_model_inference,
+        test_3_consistency,
+        test_4_ensemble,
+        test_5_multipliers,
+        test_6_pathfinding_load,
+        test_7_all_algorithms,
+        test_8_top3_selection,
+        test_9_severity_impact,
+        test_10_file_integrity
     ]
     
     for i, test_func in enumerate(tests, 1):
         print(f"\n{'='*70}")
-        print(f"EXECUTING TEST {i}/10")
-        print(f"{'='*70}")
+        print(f"Running Test {i}/{len(tests)}: {test_func.__name__}")
+        print('='*70)
         test_func()
     
     print("\n" + "="*70)
@@ -464,9 +354,12 @@ def run_all_tests():
     
     print(f"\nResults: {passed}/{total} tests passed ({passed/total*100:.0f}%)")
     
-    for i, result in enumerate(TEST_RESULTS, 1):
-        status = "[PASS]" if result['passed'] else "[FAIL]"
-        print(f"  {status} Test {i}: {result['name']}")
+    if passed == total:
+        print("\nSTATUS: ALL TESTS PASSED")
+    elif passed >= total * 0.8:
+        print(f"\nSTATUS: MOSTLY PASSED ({passed}/{total})")
+    else:
+        print(f"\nSTATUS: FAILED ({total-passed} failures)")
     
     Path('tests').mkdir(exist_ok=True)
     with open('tests/test_results.json', 'w') as f:
@@ -474,31 +367,23 @@ def run_all_tests():
             'timestamp': datetime.now().isoformat(),
             'passed': passed,
             'total': total,
-            'percentage': passed/total*100,
-            'models_tested': ['CNN', 'LSTM', 'GCN'],
+            'pass_rate': passed/total,
             'tests': TEST_RESULTS
         }, f, indent=2)
     
-    print(f"\n[OK] Results saved to: tests/test_results.json")
+    print(f"\nResults saved to: tests/test_results.json")
     
     return passed >= 8
 
 if __name__ == "__main__":
     try:
         success = run_all_tests()
-        print("\n" + "="*70)
-        if success:
-            print("[SUCCESS] 3-MODEL INTEGRATION TEST SUITE PASSED")
-            print("Models tested: CNN (images) + LSTM (time series) + GCN (spatial)")
-        else:
-            print("[WARNING] SOME TESTS FAILED - REVIEW RESULTS ABOVE")
-        print("="*70)
         sys.exit(0 if success else 1)
     except KeyboardInterrupt:
-        print("\n\n[INTERRUPTED] Tests stopped by user")
+        print("\n\nTests interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"\n\n[ERROR] Unexpected error: {e}")
+        print(f"\n\nFATAL ERROR: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
