@@ -29,7 +29,7 @@ from models.rnn_model import (
 
 def generate_synthetic_traffic_pattern_data(n_samples: int = 1000,
                                            seq_length: int = 30,
-                                           n_features: int = 10) -> tuple:
+                                           n_features: int = 15) -> tuple:
     """
     Generate synthetic traffic pattern data for demonstration
     
@@ -98,86 +98,129 @@ def generate_synthetic_travel_time_data(n_samples: int = 1000,
                                        seq_length: int = 30,
                                        n_features: int = 15) -> tuple:
     """
-    Generate synthetic travel time prediction data
+    Generate REALISTIC synthetic travel time data
     
-    Features include: segment lengths, historical times, traffic conditions,
-    incidents, weather, time of day, etc.
-    
-    Args:
-        n_samples (int): Number of samples to generate
-        seq_length (int): Number of segments in path
-        n_features (int): Number of features per segment
-        
-    Returns:
-        tuple: (path_features, travel_times)
+    IMPROVED YUH: More realistic ranges and moderate multipliers
+    Target MAE: < 10 minutes
     """
     np.random.seed(42)
     sequences = []
     travel_times = []
     
     for _ in range(n_samples):
-        # Base travel time (in minutes)
-        base_time = np.random.uniform(10, 60)
+        # REALISTIC base parameters
+        total_distance = np.random.uniform(10, 30)  # 10-30 km (typical city route)
+        base_speed = np.random.uniform(40, 70)      # 40-70 km/h
+        base_time = (total_distance / base_speed) * 60  # 8-45 minutes
         
-        # Generate path features for each segment
-        segment_lengths = np.random.uniform(0.5, 5.0, seq_length)  # km
-        historical_times = segment_lengths * np.random.uniform(2, 5, seq_length)  # minutes
+        # Generate segments
+        segment_lengths = np.random.uniform(0.5, 2.0, seq_length)
+        segment_lengths = segment_lengths * (total_distance / segment_lengths.sum())
         
-        # Traffic conditions
-        traffic_volume = np.random.uniform(0.2, 1.0, seq_length)
-        average_speed = np.random.uniform(20, 80, seq_length)  # km/h
-        traffic_density = np.random.uniform(0.1, 0.9, seq_length)
+        historical_times = segment_lengths / base_speed * 60
         
-        # Incident severity (0: none, 0.33: minor, 0.67: moderate, 1.0: severe)
-        incident_severity = np.random.choice([0, 0.33, 0.67, 1.0], 
-                                            size=seq_length, 
-                                            p=[0.7, 0.2, 0.07, 0.03])
+        # REALISTIC traffic (beta distribution - mostly moderate)
+        traffic_volume = np.random.beta(2, 3, seq_length)  # Peak at 0.4
+        average_speed = base_speed * (1.0 - traffic_volume * 0.3)  # Max 30% reduction
+        average_speed = np.clip(average_speed, 20, 80)
+        
+        traffic_density = traffic_volume * np.random.uniform(0.9, 1.1, seq_length)
+        traffic_density = np.clip(traffic_density, 0, 1)
+        
+        # REALISTIC incidents (mostly none)
+        incident_probs = [0.75, 0.18, 0.05, 0.02]  # 75% none, 18% minor, 5% moderate, 2% severe
+        incident_severity = np.random.choice([0.0, 0.25, 0.6, 1.0], size=seq_length, p=incident_probs)
         
         # Time factors
-        hour_of_day = np.random.uniform(0, 1, seq_length)
-        is_rush_hour = (hour_of_day > 0.3) & (hour_of_day < 0.4) | \
-                       (hour_of_day > 0.7) & (hour_of_day < 0.8)
-        is_rush_hour = is_rush_hour.astype(float)
-        day_of_week = np.random.uniform(0, 1, seq_length)
-        is_weekend = (day_of_week > 0.7).astype(float)
+        hour = np.random.uniform(0, 24)
+        hour_normalized = hour / 24
+        hour_of_day = np.full(seq_length, hour_normalized)
         
-        # Weather conditions
-        weather_condition = np.random.uniform(0.5, 1.0, seq_length)
+        is_rush_hour = ((7 <= hour <= 9) or (17 <= hour <= 19))
+        is_rush_hour_arr = np.full(seq_length, float(is_rush_hour))
         
-        # Road characteristics
-        num_lanes = np.random.randint(1, 5, seq_length)
-        road_quality = np.random.uniform(0.6, 1.0, seq_length)
+        day = np.random.randint(0, 7)
+        day_of_week = np.full(seq_length, day / 7)
+        is_weekend = float(day >= 5)
+        is_weekend_arr = np.full(seq_length, is_weekend)
         
-        # Construction/roadwork
-        has_construction = np.random.choice([0, 1], size=seq_length, p=[0.9, 0.1])
+        weather_condition = np.random.beta(6, 2, seq_length)  
         
-        # Calculate actual travel time with multipliers
-        actual_time = base_time * np.sum(segment_lengths)
+        num_lanes = np.random.randint(2, 5, seq_length)
+        road_quality = np.random.beta(5, 2, seq_length)
+        has_construction = np.random.choice([0, 1], size=seq_length, p=[0.95, 0.05])
         
-        # Apply traffic multipliers
-        traffic_multiplier = 1.0 + (traffic_volume.mean() - 0.5) * 0.5
-        incident_multiplier = 1.0 + incident_severity.mean() * 1.0
-        rush_hour_multiplier = 1.0 + is_rush_hour.mean() * 0.3
-        weather_multiplier = 1.0 + (1.0 - weather_condition.mean()) * 0.2
-        construction_multiplier = 1.0 + has_construction.mean() * 0.4
+        # Calculate REALISTIC travel time with MODERATE multipliers
+        actual_time = base_time
         
-        actual_time *= (traffic_multiplier * incident_multiplier * 
-                       rush_hour_multiplier * weather_multiplier * 
-                       construction_multiplier)
+        # Traffic impact (max +25%)
+        traffic_factor = 1.0 + (traffic_volume.mean() * 0.25)
         
-        # Combine all features
+        # Incident impact (REALISTIC)
+        avg_incident = incident_severity.mean()
+        if avg_incident > 0.8:      # Severe (rare)
+            incident_factor = 1.5   # +50%
+        elif avg_incident > 0.5:    # Moderate
+            incident_factor = 1.25  # +25%
+        elif avg_incident > 0.15:   # Minor
+            incident_factor = 1.1   # +10%
+        else:                       # None
+            incident_factor = 1.0
+        
+        # Rush hour (+12%)
+        rush_factor = 1.12 if is_rush_hour else 1.0
+        
+        # Weather (max +15%)
+        weather_factor = 1.0 + ((1.0 - weather_condition.mean()) * 0.15)
+        
+        # Construction (+20% if present)
+        construction_factor = 1.0 + (has_construction.mean() * 0.20)
+        
+        # Weekend (-8% traffic)
+        weekend_factor = 0.92 if is_weekend else 1.0
+        
+        # Apply ALL factors (max combined ~2.0x in extreme cases)
+        actual_time *= (traffic_factor * incident_factor * rush_factor * 
+                       weather_factor * construction_factor * weekend_factor)
+        
+        # Ensure realistic bounds (8-60 minutes for city routes)
+        actual_time = np.clip(actual_time, 8, 60)
+        
+        # Small random noise (±3%)
+        actual_time *= np.random.uniform(0.90, 1.10)
+        
+        # Combine features
         sequence = np.stack([
-            segment_lengths, historical_times, traffic_volume, average_speed,
-            traffic_density, incident_severity, hour_of_day, is_rush_hour,
-            day_of_week, is_weekend, weather_condition, num_lanes / 4.0,
-            road_quality, has_construction, 
-            np.ones(seq_length) * base_time / 60.0  # normalized base time
+            segment_lengths,
+            historical_times,
+            traffic_volume,
+            average_speed,
+            traffic_density,
+            incident_severity,
+            hour_of_day,
+            is_rush_hour_arr,
+            day_of_week,
+            is_weekend_arr,
+            weather_condition,
+            num_lanes / 4.0,
+            road_quality,
+            has_construction,
+            np.ones(seq_length) * base_time / 60.0
         ], axis=-1)
         
         sequences.append(sequence)
         travel_times.append(actual_time)
     
-    return np.array(sequences), np.array(travel_times)
+    sequences = np.array(sequences)
+    travel_times = np.array(travel_times)
+    
+    # Data quality report
+    print(f"\n[DATA QUALITY REPORT]")
+    print(f"  Travel time range: {travel_times.min():.1f} - {travel_times.max():.1f} minutes")
+    print(f"  Mean: {travel_times.mean():.1f} ± {travel_times.std():.1f} minutes")
+    print(f"  Median: {np.median(travel_times):.1f} minutes")
+    
+    return sequences, travel_times
 
 
 def plot_training_history(history: dict, 
