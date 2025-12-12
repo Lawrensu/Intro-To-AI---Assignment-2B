@@ -266,6 +266,44 @@ class PathfindingIntegration:
         print(f"Found {len(results)} valid paths")
         
         return results 
+    
+    def find_top3_algorithms_silent(self, start, goal):
+        """
+        Run all 6 algorithms and return ALL results (SILENT VERSION - no prints)
+        Use this for GUI to avoid cluttering terminal
+        """
+        algorithms = {
+            'BFS': self.bfs,
+            'DFS': self.dfs,
+            'UCS': self.ucs,
+            'GBFS': self.gbfs,
+            'A*': self.astar,
+            'IDA*': self.idastar
+        }
+        
+        results = []
+        
+        for name, func in algorithms.items():
+            try:
+                path, cost, expanded = func(start, goal)
+                
+                if path:
+                    score = cost + (expanded * 0.01)
+                    results.append({
+                        'algorithm': name,
+                        'path': path,
+                        'cost': cost,
+                        'nodes_expanded': expanded,
+                        'path_length': len(path),
+                        'score': score
+                    })
+            except Exception:
+                pass  # Silent failure
+        
+        # Sort by score (lower is better)
+        results.sort(key=lambda x: x['score'])
+        
+        return results
 
 
 if __name__ == "__main__":

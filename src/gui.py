@@ -21,10 +21,6 @@ from src.graph_construction import parse_road_network
 from src.pathfinding_integration import PathfindingIntegration
 
 
-# ============================================================================
-# MODERN UI COMPONENTS
-# ============================================================================
-
 class ModernButton(tk.Canvas):
     """Custom modern button with rounded corners and hover effects"""
     
@@ -60,10 +56,6 @@ class ModernButton(tk.Canvas):
         self.create_text(w/2, h/2, text=self.text, fill=self.fg_color, font=('Segoe UI Semibold', 11))
 
 
-# ============================================================================
-# MAIN APPLICATION
-# ============================================================================
-
 class TrafficICS_GUI:
     """Modern Dark-Themed Traffic ICS GUI"""
     
@@ -91,23 +83,19 @@ class TrafficICS_GUI:
         self.root.geometry("1600x950")
         self.root.configure(bg=self.COLORS['bg'])
         
-        # State
         self.selected_image = None
         self.predictions = {}
         self.origin_var = tk.StringVar()
         self.dest_var = tk.StringVar()
-        self.original_graph = None  # Store unmodified graph
+        self.original_graph = None
         
-        # Load models and graph
         self.load_models()
         self.load_graph()
         
-        # Set default origin/destination
         if self.display_options:
             self.origin_var.set(self.display_options[0])
             self.dest_var.set(self.display_options[-1])
         
-        # Build GUI
         self.create_widgets()
     
     def load_models(self):
@@ -126,19 +114,15 @@ class TrafficICS_GUI:
         """Load road network and create node display names"""
         nodes, ways, cameras, meta = parse_road_network('heritage_assignment_15_time_asymmetric-1.txt')
         
-        # Build adjacency list
         self.graph = {}
         for way in ways:
             if way['from'] not in self.graph:
                 self.graph[way['from']] = []
             self.graph[way['from']].append((way['to'], way['time_min']))
         
-        # STORE ORIGINAL GRAPH (important for severity comparison)
         self.original_graph = copy.deepcopy(self.graph)
-        
         self.nodes = nodes
         
-        # Create display names: "NodeID: Landmark Name"
         self.node_display_names = {}
         self.display_to_id = {}
         
@@ -147,7 +131,6 @@ class TrafficICS_GUI:
             self.node_display_names[node_id] = display_name
             self.display_to_id[display_name] = node_id
         
-        # Sorted list for dropdowns
         self.display_options = sorted(self.node_display_names.values(), 
                                      key=lambda x: int(x.split(':')[0]))
         
@@ -155,174 +138,167 @@ class TrafficICS_GUI:
         print(f"[OK] Graph loaded: {len(nodes)} nodes")
     
     def create_widgets(self):
-        """Build modern dark UI"""
+        """Build modern dark UI with optimized space"""
         
-        # ===== HEADER =====
-        header = tk.Frame(self.root, bg=self.COLORS['card'], height=100)
+        # FIXED: Reduced header from 100 to 70
+        header = tk.Frame(self.root, bg=self.COLORS['card'], height=70)
         header.pack(fill=tk.X, padx=0, pady=0)
         header.pack_propagate(False)
         
         header_content = tk.Frame(header, bg=self.COLORS['card'])
         header_content.place(relx=0.5, rely=0.5, anchor='center')
         
-        tk.Label(
-            header_content,
-            text="🚗",
-            font=('Segoe UI', 36),
-            bg=self.COLORS['card'],
-            fg=self.COLORS['text']
-        ).pack(side=tk.LEFT, padx=(0, 15))
+        tk.Label(header_content, text="Traffic ICS", font=('Segoe UI', 22, 'bold'),
+                bg=self.COLORS['card'], fg=self.COLORS['text']).pack()
         
-        title_frame = tk.Frame(header_content, bg=self.COLORS['card'])
-        title_frame.pack(side=tk.LEFT)
+        tk.Label(header_content, text="AI-Powered Route Optimization | Kuching Heritage Area",
+                font=('Segoe UI', 10), bg=self.COLORS['card'], fg=self.COLORS['text_dim']).pack()
         
-        tk.Label(
-            title_frame,
-            text="Traffic Incident Classification System",
-            font=('Segoe UI', 26, 'bold'),
-            bg=self.COLORS['card'],
-            fg=self.COLORS['text']
-        ).pack(anchor='w')
-        
-        tk.Label(
-            title_frame,
-            text="AI-Powered Route Optimization • Kuching Heritage Area",
-            font=('Segoe UI', 11),
-            bg=self.COLORS['card'],
-            fg=self.COLORS['text_dim']
-        ).pack(anchor='w', pady=(2, 0))
-        
-        # ===== MAIN CONTAINER =====
+        # Main container - FIXED: Reduced padding
         main = tk.Frame(self.root, bg=self.COLORS['bg'])
-        main.pack(fill=tk.BOTH, expand=True, padx=30, pady=20)
+        main.pack(fill=tk.BOTH, expand=True, padx=25, pady=15)
         
-        # ===== TOP ROW =====
-        top_row = tk.Frame(main, bg=self.COLORS['bg'])
-        top_row.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
+        # FIXED: Top row gets less space (40% instead of 50%)
+        top_row = tk.Frame(main, bg=self.COLORS['bg'], height=320)
+        top_row.pack(fill=tk.BOTH, expand=False, pady=(0, 15))
+        top_row.pack_propagate(False)
         
         self.create_image_panel(top_row)
         self.create_path_panel(top_row)
         
-        # ===== BOTTOM ROW =====
+        # FIXED: Bottom row gets more space (60% instead of 50%)
         self.create_results_panel(main)
     
     def create_image_panel(self, parent):
-        """Modern image analysis panel"""
+        """Compact image analysis panel"""
         panel = tk.Frame(parent, bg=self.COLORS['bg'])
         panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 15))
         
         title_frame = tk.Frame(panel, bg=self.COLORS['bg'])
-        title_frame.pack(fill=tk.X, pady=(0, 15))
+        title_frame.pack(fill=tk.X, pady=(0, 10))
         
-        tk.Label(title_frame, text="📸", font=('Segoe UI', 20), bg=self.COLORS['bg'], fg=self.COLORS['text']).pack(side=tk.LEFT, padx=(0, 10))
-        tk.Label(title_frame, text="Image Analysis", font=('Segoe UI', 18, 'bold'), bg=self.COLORS['bg'], fg=self.COLORS['text']).pack(side=tk.LEFT)
+        tk.Label(title_frame, text="Image Analysis", font=('Segoe UI', 16, 'bold'),
+                bg=self.COLORS['bg'], fg=self.COLORS['text']).pack(side=tk.LEFT)
         
         card = tk.Frame(panel, bg=self.COLORS['card'], relief=tk.FLAT)
         card.pack(fill=tk.BOTH, expand=True)
         
         card_inner = tk.Frame(card, bg=self.COLORS['card'])
-        card_inner.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        card_inner.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
-        upload_btn = ModernButton(card_inner, "📁  Upload Incident Image", self.upload_image,
-                                  bg=self.COLORS['primary'], hover=self.COLORS['primary_hover'], width=300, height=50, radius=12)
-        upload_btn.pack(pady=(0, 15))
+        upload_btn = ModernButton(card_inner, "Upload Incident Image", self.upload_image,
+                                  bg=self.COLORS['primary'], hover=self.COLORS['primary_hover'],
+                                  width=240, height=40, radius=8)
+        upload_btn.pack(pady=(0, 10))
         
         image_container = tk.Frame(card_inner, bg=self.COLORS['accent'])
-        image_container.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        image_container.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        self.image_label = tk.Label(image_container, text="No image selected\n\n📷\n\nClick upload to begin",
-                                    font=('Segoe UI', 12), bg=self.COLORS['accent'], fg=self.COLORS['text_dim'], height=14)
+        self.image_label = tk.Label(image_container, text="No image\n\nClick upload",
+                                    font=('Segoe UI', 11), bg=self.COLORS['accent'],
+                                    fg=self.COLORS['text_dim'], height=8)
         self.image_label.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
         
-        analyze_btn = ModernButton(card_inner, "🔍  Analyze with 3 Models", self.analyze_with_all_models,
-                                   bg=self.COLORS['success'], hover=self.COLORS['success_hover'], width=300, height=50, radius=12)
-        analyze_btn.pack(pady=(0, 15))
+        analyze_btn = ModernButton(card_inner, "Analyze with 3 Models", self.analyze_with_all_models,
+                                   bg=self.COLORS['success'], hover=self.COLORS['success_hover'],
+                                   width=240, height=40, radius=8)
+        analyze_btn.pack(pady=(0, 10))
         
         results_header = tk.Frame(card_inner, bg=self.COLORS['card'])
-        results_header.pack(fill=tk.X, pady=(10, 5))
+        results_header.pack(fill=tk.X, pady=(5, 5))
         
-        tk.Label(results_header, text="Predictions", font=('Segoe UI', 13, 'bold'), bg=self.COLORS['card'], fg=self.COLORS['text']).pack(side=tk.LEFT)
+        tk.Label(results_header, text="Predictions", font=('Segoe UI', 12, 'bold'),
+                bg=self.COLORS['card'], fg=self.COLORS['text']).pack(side=tk.LEFT)
         
         results_container = tk.Frame(card_inner, bg=self.COLORS['accent'])
         results_container.pack(fill=tk.BOTH, expand=True)
         
-        self.results_label = tk.Label(results_container, text="Awaiting analysis...", font=('Consolas', 9),
-                                      bg=self.COLORS['accent'], fg=self.COLORS['text_dim'], justify=tk.LEFT, anchor='nw')
-        self.results_label.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+        scrollbar = tk.Scrollbar(results_container, bg=self.COLORS['accent'])
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.results_text = tk.Text(results_container, font=('Consolas', 8),
+                                    bg=self.COLORS['accent'], fg=self.COLORS['text_dim'],
+                                    wrap=tk.WORD, yscrollcommand=scrollbar.set,
+                                    relief=tk.FLAT, bd=0, padx=10, pady=10, height=6)
+        self.results_text.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.results_text.yview)
+        
+        self.results_text.insert(tk.END, "Awaiting analysis...")
+        self.results_text.config(state=tk.DISABLED)
     
     def create_path_panel(self, parent):
-        """Modern pathfinding panel with landmark names"""
+        """Compact pathfinding panel"""
         panel = tk.Frame(parent, bg=self.COLORS['bg'])
         panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(15, 0))
         
         title_frame = tk.Frame(panel, bg=self.COLORS['bg'])
-        title_frame.pack(fill=tk.X, pady=(0, 15))
+        title_frame.pack(fill=tk.X, pady=(0, 10))
         
-        tk.Label(title_frame, text="🗺️", font=('Segoe UI', 20), bg=self.COLORS['bg'], fg=self.COLORS['text']).pack(side=tk.LEFT, padx=(0, 10))
-        tk.Label(title_frame, text="Route Planning", font=('Segoe UI', 18, 'bold'), bg=self.COLORS['bg'], fg=self.COLORS['text']).pack(side=tk.LEFT)
+        tk.Label(title_frame, text="Route Planning", font=('Segoe UI', 16, 'bold'),
+                bg=self.COLORS['bg'], fg=self.COLORS['text']).pack(side=tk.LEFT)
         
         card = tk.Frame(panel, bg=self.COLORS['card'])
         card.pack(fill=tk.BOTH, expand=True)
         
         card_inner = tk.Frame(card, bg=self.COLORS['card'])
-        card_inner.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        card_inner.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
-        # Origin selection
-        tk.Label(card_inner, text="Origin (Start Point)", font=('Segoe UI', 11, 'bold'),
+        # Origin
+        tk.Label(card_inner, text="Origin (Start Point)", font=('Segoe UI', 10, 'bold'),
                 bg=self.COLORS['card'], fg=self.COLORS['text']).pack(fill=tk.X, pady=(0, 5))
         
-        origin_frame = tk.Frame(card_inner, bg=self.COLORS['accent'], height=45)
-        origin_frame.pack(fill=tk.X, pady=(0, 20))
+        origin_frame = tk.Frame(card_inner, bg=self.COLORS['accent'], height=40)
+        origin_frame.pack(fill=tk.X, pady=(0, 15))
         origin_frame.pack_propagate(False)
         
-        # CHANGED: Use display names ("1: Fort Margherita")
         origin_combo = ttk.Combobox(origin_frame, textvariable=self.origin_var,
-                                    values=self.display_options, state='readonly', font=('Segoe UI', 10))
-        origin_combo.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+                                    values=self.display_options, state='readonly', font=('Segoe UI', 9))
+        origin_combo.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
         
-        # Destination selection
-        tk.Label(card_inner, text="Destination (Goal)", font=('Segoe UI', 11, 'bold'),
+        # Destination
+        tk.Label(card_inner, text="Destination (Goal)", font=('Segoe UI', 10, 'bold'),
                 bg=self.COLORS['card'], fg=self.COLORS['text']).pack(fill=tk.X, pady=(0, 5))
         
-        dest_frame = tk.Frame(card_inner, bg=self.COLORS['accent'], height=45)
-        dest_frame.pack(fill=tk.X, pady=(0, 20))
+        dest_frame = tk.Frame(card_inner, bg=self.COLORS['accent'], height=40)
+        dest_frame.pack(fill=tk.X, pady=(0, 15))
         dest_frame.pack_propagate(False)
         
-        # CHANGED: Use display names ("10: Sarawak Museum")
         dest_combo = ttk.Combobox(dest_frame, textvariable=self.dest_var,
-                                  values=self.display_options, state='readonly', font=('Segoe UI', 10))
-        dest_combo.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+                                  values=self.display_options, state='readonly', font=('Segoe UI', 9))
+        dest_combo.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
         
-        calc_btn = ModernButton(card_inner, "🚀  Find Top-5 Routes", self.run_pathfinding,
-                               bg=self.COLORS['warning'], hover=self.COLORS['warning_hover'], width=300, height=50, radius=12)
-        calc_btn.pack(pady=(0, 20))
+        calc_btn = ModernButton(card_inner, "Find Top-5 Routes", self.run_pathfinding,
+                               bg=self.COLORS['warning'], hover=self.COLORS['warning_hover'],
+                               width=240, height=40, radius=8)
+        calc_btn.pack(pady=(0, 15))
         
         info_frame = tk.Frame(card_inner, bg=self.COLORS['accent'])
-        info_frame.pack(fill=tk.X, pady=(10, 0))
+        info_frame.pack(fill=tk.X, pady=(5, 0))
         
         info_inner = tk.Frame(info_frame, bg=self.COLORS['accent'])
-        info_inner.pack(fill=tk.X, padx=15, pady=15)
+        info_inner.pack(fill=tk.X, padx=12, pady=12)
         
-        tk.Label(info_inner, text="🤖 AI Models Active", font=('Segoe UI', 11, 'bold'),
-                bg=self.COLORS['accent'], fg=self.COLORS['text']).pack(anchor='w', pady=(0, 8))
+        tk.Label(info_inner, text="AI Models Active", font=('Segoe UI', 10, 'bold'),
+                bg=self.COLORS['accent'], fg=self.COLORS['text']).pack(anchor='w', pady=(0, 6))
         
-        for info in ["• ResNet-18 - Baseline architecture", "• MobileNet-V2 - Lightweight model", "• EfficientNet-B0 - State-of-the-art"]:
-            tk.Label(info_inner, text=info, font=('Segoe UI', 9), bg=self.COLORS['accent'], fg=self.COLORS['text_dim']).pack(anchor='w', pady=2)
+        for info in ["ResNet-18 - Baseline", "MobileNet-V2 - Lightweight", "EfficientNet-B0 - Accurate"]:
+            tk.Label(info_inner, text=f"• {info}", font=('Segoe UI', 8),
+                    bg=self.COLORS['accent'], fg=self.COLORS['text_dim']).pack(anchor='w', pady=1)
     
     def create_results_panel(self, parent):
-        """Modern results panel"""
+        """LARGE results panel for routes"""
         panel = tk.Frame(parent, bg=self.COLORS['bg'])
         panel.pack(fill=tk.BOTH, expand=True)
         
         title_frame = tk.Frame(panel, bg=self.COLORS['bg'])
-        title_frame.pack(fill=tk.X, pady=(0, 15))
+        title_frame.pack(fill=tk.X, pady=(0, 10))
         
-        tk.Label(title_frame, text="📊", font=('Segoe UI', 20), bg=self.COLORS['bg'], fg=self.COLORS['text']).pack(side=tk.LEFT, padx=(0, 10))
-        tk.Label(title_frame, text="Analysis Results", font=('Segoe UI', 18, 'bold'), bg=self.COLORS['bg'], fg=self.COLORS['text']).pack(side=tk.LEFT)
+        tk.Label(title_frame, text="Analysis Results", font=('Segoe UI', 16, 'bold'),
+                bg=self.COLORS['bg'], fg=self.COLORS['text']).pack(side=tk.LEFT)
         
-        card = tk.Frame(panel, bg=self.COLORS['card'], height=250)
+        # FIXED: Let it expand fully (no fixed height)
+        card = tk.Frame(panel, bg=self.COLORS['card'])
         card.pack(fill=tk.BOTH, expand=True)
-        card.pack_propagate(False)
         
         text_container = tk.Frame(card, bg=self.COLORS['accent'])
         text_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
@@ -330,9 +306,11 @@ class TrafficICS_GUI:
         scrollbar = tk.Scrollbar(text_container, bg=self.COLORS['accent'])
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.path_results = tk.Text(text_container, font=('Consolas', 9), bg=self.COLORS['accent'], fg=self.COLORS['text'],
-                                    wrap=tk.WORD, yscrollcommand=scrollbar.set, relief=tk.FLAT, bd=0, padx=15, pady=15,
-                                    insertbackground=self.COLORS['text'], selectbackground=self.COLORS['primary'], selectforeground=self.COLORS['text'])
+        # FIXED: Increased font to 11 for better readability
+        self.path_results = tk.Text(text_container, font=('Consolas', 11),
+                                    bg=self.COLORS['accent'], fg=self.COLORS['text'],
+                                    wrap=tk.WORD, yscrollcommand=scrollbar.set,
+                                    relief=tk.FLAT, bd=0, padx=15, pady=15)
         self.path_results.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.path_results.yview)
         
@@ -340,12 +318,15 @@ class TrafficICS_GUI:
     
     def upload_image(self):
         """Upload image"""
-        file_path = filedialog.askopenfilename(title="Select Incident Image", filetypes=[("Images", "*.jpg *.jpeg *.png"), ("All files", "*.*")])
+        file_path = filedialog.askopenfilename(
+            title="Select Incident Image",
+            filetypes=[("Images", "*.jpg *.jpeg *.png"), ("All files", "*.*")]
+        )
         
         if file_path:
             self.selected_image = file_path
             img = Image.open(file_path)
-            img.thumbnail((450, 350))
+            img.thumbnail((400, 220))
             photo = ImageTk.PhotoImage(img)
             self.image_label.config(image=photo, text="")
             self.image_label.image = photo
@@ -365,7 +346,6 @@ class TrafficICS_GUI:
         img = Image.open(self.selected_image).convert('RGB')
         img_tensor = transform(img).unsqueeze(0)
         
-        # Predict
         sev1, conf1 = predict_severity(self.resnet, img_tensor)
         sev2, conf2 = predict_severity(self.mobilenet, img_tensor)
         sev3, conf3 = predict_severity(self.efficientnet, img_tensor)
@@ -376,25 +356,27 @@ class TrafficICS_GUI:
             'EfficientNet-B0': (sev3, conf3)
         }
         
-        # Display
-        result = "═══ 3-MODEL PREDICTIONS ═══\n\n"
+        result = "3-MODEL PREDICTIONS\n" + "="*40 + "\n\n"
         for model, (sev, conf) in self.predictions.items():
-            result += f"┌─ {model}\n"
-            result += f"│  Severity:   {sev.upper()}\n"
-            result += f"│  Confidence: {conf*100:.1f}%\n"
-            result += f"└─ Multiplier: {get_edge_multiplier(sev)}x\n\n"
+            result += f"{model}:\n"
+            result += f"  Severity:   {sev.upper()}\n"
+            result += f"  Confidence: {conf*100:.1f}%\n"
+            result += f"  Multiplier: {get_edge_multiplier(sev)}x\n\n"
         
-        # Ensemble
         severities = [s for s, _ in self.predictions.values()]
         ensemble = max(set(severities), key=severities.count)
-        result += f"═══ ENSEMBLE RESULT ═══\n"
-        result += f"Final: {ensemble.upper()} ({get_edge_multiplier(ensemble)}x)"
+        result += "="*40 + "\n"
+        result += f"ENSEMBLE: {ensemble.upper()}\n"
+        result += f"Multiplier: {get_edge_multiplier(ensemble)}x\n"
+        result += "="*40
         
-        self.results_label.config(text=result)
+        self.results_text.config(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.insert(tk.END, result)
+        self.results_text.config(state=tk.DISABLED)
     
     def run_pathfinding(self):
-        """Find top-5 paths with severity impact comparison"""
-        # Convert display names to node IDs
+        """Find top-5 paths"""
         origin_display = self.origin_var.get()
         dest_display = self.dest_var.get()
         
@@ -415,79 +397,69 @@ class TrafficICS_GUI:
         
         self.path_results.delete(1.0, tk.END)
         
-        # Show selected route with landmark names
-        self.path_results.insert(tk.END, f"Route: {origin_display} → {dest_display}\n")
-        self.path_results.insert(tk.END, "═"*70 + "\n\n")
+        self.path_results.insert(tk.END, f"Route: {origin_display} -> {dest_display}\n")
+        self.path_results.insert(tk.END, "="*70 + "\n\n")
         
-        # SEVERITY IMPACT: Compare with and without incident
         if self.predictions:
             severities = [s for s, _ in self.predictions.values()]
             ensemble = max(set(severities), key=severities.count)
             multiplier = get_edge_multiplier(ensemble)
             
-            # Create modified graph (DON'T modify original)
             modified_graph = {}
             for node in self.original_graph:
                 modified_graph[node] = [(n, w * multiplier) for n, w in self.original_graph[node]]
             
-            # Show severity impact
-            self.path_results.insert(tk.END, f"🚨 INCIDENT DETECTED: {ensemble.upper()}\n")
-            self.path_results.insert(tk.END, f"   Travel Time Multiplier: {multiplier}x\n")
-            self.path_results.insert(tk.END, f"   Impact: +{(multiplier-1)*100:.0f}% travel time increase\n\n")
+            self.path_results.insert(tk.END, f"INCIDENT DETECTED: {ensemble.upper()}\n")
+            self.path_results.insert(tk.END, f"Travel Time Multiplier: {multiplier}x\n")
+            self.path_results.insert(tk.END, f"Impact: +{(multiplier-1)*100:.0f}% travel time\n\n")
             
-            # Run pathfinding on ORIGINAL graph first
             pathfinder_original = PathfindingIntegration(self.original_graph, self.nodes)
             original_result = pathfinder_original.astar(start, goal)
             original_cost = original_result[1] if original_result[0] else float('inf')
             
-            # Run pathfinding on MODIFIED graph
             pathfinder_modified = PathfindingIntegration(modified_graph, self.nodes)
-            all_results = pathfinder_modified.find_top3_algorithms(start, goal)
+            all_results = pathfinder_modified.find_top3_algorithms_silent(start, goal)
             
-            # Show comparison
-            self.path_results.insert(tk.END, f"⚙️  BEFORE/AFTER COMPARISON:\n")
-            self.path_results.insert(tk.END, f"   Without incident: {original_cost:.2f} min\n")
+            self.path_results.insert(tk.END, "BEFORE/AFTER COMPARISON:\n")
+            self.path_results.insert(tk.END, f"  Without incident: {original_cost:.2f} min\n")
             if all_results:
                 best_cost = all_results[0]['cost']
                 delay = best_cost - original_cost
-                self.path_results.insert(tk.END, f"   With {ensemble} incident: {best_cost:.2f} min\n")
-                self.path_results.insert(tk.END, f"   Additional delay: +{delay:.2f} min ({delay/original_cost*100:.0f}%)\n\n")
+                self.path_results.insert(tk.END, f"  With {ensemble} incident: {best_cost:.2f} min\n")
+                self.path_results.insert(tk.END, f"  Additional delay: +{delay:.2f} min\n\n")
         else:
-            # No incident detected
-            self.path_results.insert(tk.END, "ℹ️  No incident detected (using normal traffic conditions)\n\n")
+            self.path_results.insert(tk.END, "No incident detected (normal conditions)\n\n")
             pathfinder_original = PathfindingIntegration(self.original_graph, self.nodes)
-            all_results = pathfinder_original.find_top3_algorithms(start, goal)
+            all_results = pathfinder_original.find_top3_algorithms_silent(start, goal)
         
-        # Display top-5 routes
         top5 = all_results[:5] if len(all_results) >= 5 else all_results
         
-        self.path_results.insert(tk.END, "═"*70 + "\n")
-        self.path_results.insert(tk.END, "TOP-5 OPTIMAL ROUTES\n")
-        self.path_results.insert(tk.END, "═"*70 + "\n\n")
+        self.path_results.insert(tk.END, "="*70 + "\n")
+        self.path_results.insert(tk.END, f"TOP-5 OPTIMAL ROUTES (Found {len(all_results)} total)\n")
+        self.path_results.insert(tk.END, "="*70 + "\n\n")
         
         for i, result in enumerate(top5, 1):
-            self.path_results.insert(tk.END, f"┌─ Route {i}: {result['algorithm']}\n")
-            self.path_results.insert(tk.END, f"│  Travel Time:    {result['cost']:.2f} min\n")
-            self.path_results.insert(tk.END, f"│  Nodes Expanded: {result['nodes_expanded']}\n")
-            self.path_results.insert(tk.END, f"│  Path Length:    {result['path_length']} segments\n")
+            self.path_results.insert(tk.END, f"Route {i}: {result['algorithm']}\n")
+            self.path_results.insert(tk.END, f"  Travel Time:    {result['cost']:.2f} min\n")
+            self.path_results.insert(tk.END, f"  Nodes Expanded: {result['nodes_expanded']}\n")
+            self.path_results.insert(tk.END, f"  Path Length:    {result['path_length']} segments\n")
             
-            # Show path with landmark names (first 4 nodes)
             path_preview = []
             for node_id in result['path'][:4]:
                 path_preview.append(self.node_display_names.get(node_id, node_id))
-            self.path_results.insert(tk.END, f"└─ Path: {' → '.join(path_preview)}...\n\n")
+            self.path_results.insert(tk.END, f"  Path: {' -> '.join(path_preview)}...\n\n")
 
 
 def main():
     root = tk.Tk()
     
-    # Dark theme for comboboxes
     style = ttk.Style()
     style.theme_use('clam')
     style.configure('TCombobox', fieldbackground='#2d2d2d', background='#3d3d3d',
                    foreground='#f5f5f5', arrowcolor='#9ca3af', borderwidth=0, relief='flat')
     style.map('TCombobox', fieldbackground=[('readonly', '#2d2d2d')],
-             selectbackground=[('readonly', '#3b82f6')], selectforeground=[('readonly', '#f5f5f5')])
+             selectbackground=[('readonly', '#3b82f6')],
+             selectforeground=[('readonly', '#f5f5f5')])
     
     app = TrafficICS_GUI(root)
     root.mainloop()
